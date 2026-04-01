@@ -33,9 +33,10 @@ LOCATION_FONT_SIZE = 34
 LOCATION_MARGIN = 20               # 우하단 여백(px)
 
 # === Whisper 설정 ===
-WHISPER_MODEL = "large-v3"         # GPU 있으면 large-v3 권장 (한국어 정확도 최고)
-WHISPER_DEVICE = "cuda"            # RTX 3060 GPU 사용
-WHISPER_COMPUTE_TYPE = "float16"   # RTX 3060 Ampere: float16이 최적 (속도↑ 품질↑)
+# .env 또는 환경변수로 덮어쓸 수 있음. 미설정 시 "large-v3" 사용.
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "large-v3")
+WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
+WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 
 # === Claude AI 설정 ===
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")

@@ -120,7 +120,15 @@ def main():
     # API 키 안내
     if not config.ANTHROPIC_API_KEY:
         print("[알림] ANTHROPIC_API_KEY 없음 - 규칙 기반 클립 평가를 사용합니다.")
-        print("       AI 평가를 사용하려면: export ANTHROPIC_API_KEY=your_key_here\n")
+        print("       AI 평가를 사용하려면 .env에 ANTHROPIC_API_KEY=sk-ant-... 추가\n")
+
+    # Whisper 모델 명시
+    if args.skip_transcribe:
+        print("[음성인식] 건너뜀 (--skip-transcribe)")
+    else:
+        src = "CLI 인수" if args.whisper_model else ".env / 기본값"
+        print(f"[음성인식] Whisper 모델: {config.WHISPER_MODEL}  ({src})")
+        print(f"           디바이스: {config.WHISPER_DEVICE.upper()}  |  연산타입: {config.WHISPER_COMPUTE_TYPE}\n")
 
     # 파이프라인 실행
     if args.skip_transcribe:
