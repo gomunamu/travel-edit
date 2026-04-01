@@ -305,16 +305,22 @@ def render_day(
         render_args.append((clip, str(out_clip), out_res, sub_path, loc_path))
 
     # 이미 렌더링된 클립 건너뜀 (corrupt 파일은 재렌더링)
-    def _needs_render(path: str) -> bool:
+    def _needs_render(path: str, loc_path: str = None) -> bool:
         p = Path(path)
         if not p.exists() or p.stat().st_size < 10_000:
             return True
         if not is_valid_video(path):
             p.unlink(missing_ok=True)
             return True
+        # 위치 ASS가 렌더링 클립보다 새로우면 위치 오버레이 반영 위해 재렌더
+        if loc_path:
+            lp = Path(loc_path)
+            if lp.exists() and lp.stat().st_mtime > p.stat().st_mtime:
+                return True
         return False
 
-    to_render = [(args, i) for i, args in enumerate(render_args) if _needs_render(args[1])]
+    to_render = [(args, i) for i, args in enumerate(render_args)
+                 if _needs_render(args[1], args[4])]
 
     failed_indices = set()
 
@@ -339,11 +345,12 @@ def render_day(
         if failed_indices:
             print(f"  [경고] {len(failed_indices)}개 클립 렌더링 실패, 병합에서 제외")
 
-    # 최종 병합 (존재하고 유효한 크기의 클립만 포함, 실패한 클립 제외)
+    # 최종 병합 (존재하고 유효한 클립만 포함, 실패/손상 클립 제외)
     clip_paths = [
         args[1] for i, args in enumerate(render_args)
         if i not in failed_indices
         and Path(args[1]).exists() and Path(args[1]).stat().st_size >= 10_000
+        and is_valid_video(args[1])
     ]
     if not clip_paths:
         print(f"  → {day_key}: 렌더링된 클립 없음")

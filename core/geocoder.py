@@ -18,18 +18,24 @@ def get_location_name(lat: float, lon: float) -> Optional[str]:
         admin1 = r.get("admin1", "").strip()
 
         if not name:
-            return admin1 or None
+            name = admin1
+        if not name:
+            return None
 
-        # 한국은 도시명만
-        if country == "KR":
-            return name
-
-        # 해외는 도시, 국가
+        # 나라명 매핑 (ISO 코드 → 표시명)
         country_names = {
+            "KR": "South Korea",
             "US": "USA", "JP": "Japan", "CN": "China", "DE": "Germany",
             "FR": "France", "GB": "UK", "IT": "Italy", "ES": "Spain",
             "AU": "Australia", "TH": "Thailand", "VN": "Vietnam",
             "CH": "Switzerland", "AT": "Austria", "NZ": "New Zealand",
+            "TW": "Taiwan", "HK": "Hong Kong", "SG": "Singapore",
+            "PH": "Philippines", "ID": "Indonesia", "MY": "Malaysia",
+            "IN": "India", "TR": "Turkey", "GR": "Greece", "PT": "Portugal",
+            "NL": "Netherlands", "BE": "Belgium", "SE": "Sweden",
+            "NO": "Norway", "DK": "Denmark", "FI": "Finland",
+            "PL": "Poland", "CZ": "Czech Republic", "HU": "Hungary",
+            "CA": "Canada", "MX": "Mexico", "BR": "Brazil",
         }
         country_display = country_names.get(country, country)
         return f"{name}, {country_display}"

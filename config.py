@@ -13,13 +13,13 @@ FFMPEG_PRESET = "fast"
 
 # === 자막 설정 ===
 SUBTITLE_FONT = "Arial"            # 한글 지원 폰트: NanumGothic, Malgun Gothic 등
-SUBTITLE_FONT_SIZE = 42
+SUBTITLE_FONT_SIZE = 52
 SUBTITLE_MARGIN_V = 40             # 하단 여백(px)
 
 # === 장소 표시 설정 ===
 LOCATION_DISPLAY_DURATION = 3.5    # 장소 텍스트 표시 시간(초)
 LOCATION_FADE_DURATION = 0.4       # 페이드 인/아웃 시간(초)
-LOCATION_FONT_SIZE = 26
+LOCATION_FONT_SIZE = 34
 LOCATION_MARGIN = 20               # 우하단 여백(px)
 
 # === Whisper 설정 ===
