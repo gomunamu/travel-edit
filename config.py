@@ -1,4 +1,14 @@
 import os
+from pathlib import Path
+
+# .env 파일 로드 (python-dotenv 없이 직접 파싱)
+_env_path = Path(__file__).parent / ".env"
+if _env_path.exists():
+    for _line in _env_path.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
 
 # === 파이프라인 설정 ===
 MAX_SEGMENT_DURATION = 30          # 이 시간(초) 이상인 클립은 자동 분할
