@@ -94,6 +94,16 @@ def main():
         "--skip-transcribe", action="store_true",
         help="음성 인식 건너뜀 (자막 없음, 빠름)"
     )
+    parser.add_argument(
+        "--subtitle-lang", default=None,
+        choices=["auto", "ko", "en", "ja", "zh", "off"],
+        help="자막 언어 (auto=한/영 자동감지, ko=한국어, en=영어, ja=일본어, zh=중국어, off=없음 / 기본: auto)"
+    )
+    parser.add_argument(
+        "--subtitle-mode", default=None,
+        choices=["overlay", "srt"],
+        help="자막 방식 (overlay=영상 번인, srt=별도 .srt 파일 / 기본: overlay)"
+    )
 
     args = parser.parse_args()
 
@@ -108,6 +118,12 @@ def main():
         config.MAX_SEGMENT_DURATION = args.max_segment
     if args.workers:
         config.RENDER_WORKERS = args.workers
+    if args.subtitle_lang:
+        config.SUBTITLE_LANG = args.subtitle_lang
+    if args.subtitle_mode:
+        config.SUBTITLE_MODE = args.subtitle_mode
+    if args.skip_transcribe:
+        config.SUBTITLE_LANG = "off"
 
     # 의존성 확인
     check_dependencies()
@@ -122,22 +138,19 @@ def main():
         print("[알림] ANTHROPIC_API_KEY 없음 - 규칙 기반 클립 평가를 사용합니다.")
         print("       AI 평가를 사용하려면 .env에 ANTHROPIC_API_KEY=sk-ant-... 추가\n")
 
-    # Whisper 모델 명시
-    if args.skip_transcribe:
-        print("[음성인식] 건너뜀 (--skip-transcribe)")
+    # Whisper / 자막 설정 명시
+    if config.SUBTITLE_LANG == "off":
+        print("[음성인식] 건너뜀 (자막 없음)")
     else:
-        src = "CLI 인수" if args.whisper_model else ".env / 기본값"
-        print(f"[음성인식] Whisper 모델: {config.WHISPER_MODEL}  ({src})")
-        print(f"           디바이스: {config.WHISPER_DEVICE.upper()}  |  연산타입: {config.WHISPER_COMPUTE_TYPE}\n")
-
-    # 파이프라인 실행
-    if args.skip_transcribe:
-        # 음성 인식 건너뜀 - transcribe 함수를 빈 결과 반환으로 교체
-        import core.transcriber as t_module
-        t_module.transcribe = lambda _: {
-            "language": "unknown", "language_probability": 0,
-            "segments": [], "has_speech": False, "total_speech_sec": 0
-        }
+        whisper_src = "CLI 인수" if args.whisper_model else ".env / 기본값"
+        lang_src    = "CLI 인수" if args.subtitle_lang else ".env / 기본값"
+        mode_src    = "CLI 인수" if args.subtitle_mode else ".env / 기본값"
+        lang_label  = {"auto": "자동(한/영)", "ko": "한국어", "en": "영어",
+                       "ja": "일본어", "zh": "중국어"}.get(config.SUBTITLE_LANG, config.SUBTITLE_LANG)
+        mode_label  = {"overlay": "영상 번인", "srt": "별도 SRT 파일"}.get(config.SUBTITLE_MODE, config.SUBTITLE_MODE)
+        print(f"[음성인식] Whisper 모델: {config.WHISPER_MODEL}  ({whisper_src})")
+        print(f"           디바이스: {config.WHISPER_DEVICE.upper()}  |  연산타입: {config.WHISPER_COMPUTE_TYPE}")
+        print(f"[자막]     언어: {lang_label} ({lang_src})  |  방식: {mode_label} ({mode_src})\n")
 
     from core.pipeline import run
     run(args.input, args.output)

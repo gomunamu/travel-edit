@@ -70,6 +70,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             f.write("\n")
 
 
+def make_subtitle_srt(segments: List[dict], output_path: str):
+    """
+    segments 리스트에서 SRT 자막 파일 생성.
+    각 segment: {"start": float, "end": float, "text": str}
+    """
+    def _srt_time(seconds: float) -> str:
+        seconds = max(0.0, seconds)
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        ms = int(round((seconds % 1) * 1000))
+        if ms >= 1000:
+            ms = 999
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        for i, seg in enumerate(segments, 1):
+            f.write(f"{i}\n")
+            f.write(f"{_srt_time(seg['start'])} --> {_srt_time(seg['end'])}\n")
+            f.write(f"{seg['text']}\n\n")
+
+
 def make_location_ass(
     location_name: str,
     clip_duration: float,

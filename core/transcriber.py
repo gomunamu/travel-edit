@@ -72,20 +72,26 @@ def _extract_audio(video_path: str, wav_path: str):
     subprocess.run(cmd, capture_output=True, timeout=60)
 
 
-def transcribe(video_path: str) -> dict:
+def transcribe(video_path: str, force_lang: str = None) -> dict:
     """음성 인식 실행, TranscriptDict 반환. 풀에서 모델을 빌려 쓰고 반납."""
     pool = _get_pool()
     model = pool.get()
     try:
-        return _transcribe_with(model, video_path)
+        return _transcribe_with(model, video_path, force_lang)
     finally:
         pool.put(model)
 
 
-def _transcribe_with(model, video_path: str) -> dict:
+# Whisper 언어 코드 매핑 (config SUBTITLE_LANG → Whisper language code)
+_LANG_MAP = {"ko": "ko", "en": "en", "ja": "ja", "zh": "zh"}
+
+
+def _transcribe_with(model, video_path: str, force_lang: str = None) -> dict:
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         wav_path = tmp.name
+
+    whisper_lang = _LANG_MAP.get(force_lang)  # None이면 자동 감지
 
     try:
         _extract_audio(video_path, wav_path)
@@ -95,7 +101,7 @@ def _transcribe_with(model, video_path: str) -> dict:
 
         segments_iter, info = model.transcribe(
             wav_path,
-            language=None,          # 1차: 자동 감지
+            language=whisper_lang,  # None=자동감지, 지정 시 해당 언어로 강제
             beam_size=5,
             best_of=5,
             vad_filter=True,
@@ -107,8 +113,8 @@ def _transcribe_with(model, video_path: str) -> dict:
             condition_on_previous_text=True,
         )
 
-        # 한국어/영어만 허용 - 일본어 등 감지 시 한국어로 강제
-        if info.language not in ("ko", "en"):
+        # auto 모드: 한국어/영어 외 감지되면 한국어로 재시도
+        if whisper_lang is None and info.language not in ("ko", "en"):
             segments_iter, info = model.transcribe(
                 wav_path,
                 language="ko",

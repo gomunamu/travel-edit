@@ -38,6 +38,10 @@ WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "large-v3")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
 WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 
+# === 자막 설정 (언어/방식) ===
+SUBTITLE_LANG = os.environ.get("SUBTITLE_LANG", "auto")    # auto|ko|en|ja|zh|off
+SUBTITLE_MODE = os.environ.get("SUBTITLE_MODE", "overlay") # overlay|srt
+
 # === Claude AI 설정 ===
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = "claude-sonnet-4-6"

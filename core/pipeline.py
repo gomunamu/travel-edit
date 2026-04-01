@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExec
 from typing import List, Dict, Optional
 import threading
 
+import config as _config
 from config import (
     METADATA_WORKERS, SEGMENT_WORKERS, TRANSCRIBE_WORKERS, RENDER_WORKERS,
     CLAUDE_MAX_CONCURRENT, LOCATION_DISPLAY_DURATION, LOCATION_FADE_DURATION,
@@ -19,7 +20,7 @@ from core.segmenter import split_clip
 from core.transcriber import transcribe, init_model_pool
 from core.evaluator import evaluate_clip
 from core.geocoder import coords_to_str
-from core.subtitle import make_subtitle_ass, make_location_ass
+from core.subtitle import make_subtitle_ass, make_subtitle_srt, make_location_ass
 from core.renderer import get_day_resolution, render_clip, concat_day, is_valid_video
 
 try:
@@ -150,9 +151,12 @@ def transcribe_all(segments: List[dict], cache: Cache) -> Dict[str, dict]:
 
     lock = threading.Lock()
 
+    _lang_map = {"ko": "ko", "en": "en", "ja": "ja", "zh": "zh"}
+    force_lang = _lang_map.get(_config.SUBTITLE_LANG)  # None = auto
+
     def _transcribe_one(seg):
         h = seg["clip_hash"]
-        result = transcribe(seg["filepath"])
+        result = transcribe(seg["filepath"], force_lang=force_lang)
         cache.save(h, "transcript", result)
         with lock:
             transcripts[h] = result
@@ -268,11 +272,11 @@ def render_day(
         h = clip["clip_hash"]
         out_clip = rendered_dir / f"clip_{idx:04d}_{h}.mp4"
 
-        # 자막 ASS 생성
+        # 자막 ASS 생성 (overlay 모드에서만 번인)
         sub_path = None
         transcript = transcripts.get(h, {})
         segs = transcript.get("segments", [])
-        if segs and transcript.get("has_speech"):
+        if segs and transcript.get("has_speech") and _config.SUBTITLE_MODE == "overlay":
             sub_path = cache.ass_path(h, "subtitle")
             if not cache.ass_exists(h, "subtitle"):
                 trim_offset = clip["trim_start"]
@@ -346,18 +350,44 @@ def render_day(
             print(f"  [경고] {len(failed_indices)}개 클립 렌더링 실패, 병합에서 제외")
 
     # 최종 병합 (존재하고 유효한 클립만 포함, 실패/손상 클립 제외)
-    clip_paths = [
-        args[1] for i, args in enumerate(render_args)
+    included = [
+        args for i, args in enumerate(render_args)
         if i not in failed_indices
         and Path(args[1]).exists() and Path(args[1]).stat().st_size >= 10_000
         and is_valid_video(args[1])
     ]
+    clip_paths = [args[1] for args in included]
     if not clip_paths:
         print(f"  → {day_key}: 렌더링된 클립 없음")
         return False
 
     print(f"  병합 중: {len(clip_paths)}개 → {Path(output_path).name}")
     ok = concat_day(clip_paths, output_path)
+
+    # SRT 모드: 병합 성공 후 타임라인 맞춰 단일 SRT 파일 생성
+    if ok and _config.SUBTITLE_MODE == "srt":
+        cumulative = 0.0
+        srt_segs = []
+        for args in included:
+            clip, _, _, _, _ = args
+            h = clip["clip_hash"]
+            transcript = transcripts.get(h, {})
+            segs = transcript.get("segments", [])
+            trim_offset = clip["trim_start"]
+            clip_dur = clip["trim_end"] - clip["trim_start"]
+            if segs and transcript.get("has_speech"):
+                for seg in segs:
+                    if seg.get("no_speech_prob", 1.0) < 0.5 and seg.get("text", "").strip():
+                        start = max(0.0, seg["start"] - trim_offset) + cumulative
+                        end   = min(max(start + 0.5, seg["end"] - trim_offset) + cumulative,
+                                    cumulative + clip_dur)
+                        srt_segs.append({"start": start, "end": end,
+                                         "text": seg["text"].strip()})
+            cumulative += clip_dur
+        if srt_segs:
+            srt_path = output_path.replace(".mp4", ".srt")
+            make_subtitle_srt(srt_segs, srt_path)
+            print(f"  ✓ SRT 자막: {Path(srt_path).name} ({len(srt_segs)}개)")
 
     # 병합 완료 후 개별 렌더링 클립 삭제
     if ok:
@@ -401,7 +431,11 @@ def run(input_folder: str, output_folder: str):
 
     # 4. 음성 인식
     print("\n[4/6] 음성 인식 (Whisper)...")
-    transcripts = transcribe_all(segments, cache)
+    if _config.SUBTITLE_LANG == "off":
+        print("  → 자막 비활성화, 건너뜀")
+        transcripts = {}
+    else:
+        transcripts = transcribe_all(segments, cache)
 
     # 5. AI 평가
     print("\n[5/6] AI 클립 평가...")
