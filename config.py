@@ -1,0 +1,39 @@
+import os
+
+# === 파이프라인 설정 ===
+MAX_SEGMENT_DURATION = 30          # 이 시간(초) 이상인 클립은 자동 분할
+MIN_SEGMENT_DURATION = 2           # 이 시간(초) 미만은 자동 버림
+PURE_LANDSCAPE_THRESHOLD = 10      # 음성 없이 이 시간(초) 이상이면 AI가 컷 평가
+
+# === 출력 설정 ===
+OUTPUT_RESOLUTION = (1920, 1080)   # 출력 해상도
+OUTPUT_FPS = 30
+CRF = 18                           # 화질 (낮을수록 좋음, 18 = 거의 무손실)
+FFMPEG_PRESET = "fast"
+
+# === 자막 설정 ===
+SUBTITLE_FONT = "Arial"            # 한글 지원 폰트: NanumGothic, Malgun Gothic 등
+SUBTITLE_FONT_SIZE = 42
+SUBTITLE_MARGIN_V = 40             # 하단 여백(px)
+
+# === 장소 표시 설정 ===
+LOCATION_DISPLAY_DURATION = 3.5    # 장소 텍스트 표시 시간(초)
+LOCATION_FADE_DURATION = 0.4       # 페이드 인/아웃 시간(초)
+LOCATION_FONT_SIZE = 26
+LOCATION_MARGIN = 20               # 우하단 여백(px)
+
+# === Whisper 설정 ===
+WHISPER_MODEL = "large-v3"         # GPU 있으면 large-v3 권장 (한국어 정확도 최고)
+WHISPER_DEVICE = "cuda"            # RTX 3060 GPU 사용
+WHISPER_COMPUTE_TYPE = "float16"   # RTX 3060 Ampere: float16이 최적 (속도↑ 품질↑)
+
+# === Claude AI 설정 ===
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+CLAUDE_MODEL = "claude-sonnet-4-6"
+CLAUDE_MAX_CONCURRENT = 5          # 동시 API 호출 수
+
+# === 병렬 처리 설정 ===
+METADATA_WORKERS = 8
+SEGMENT_WORKERS = None             # None = cpu_count // 2 (ffmpeg -c copy는 I/O 병렬 가능)
+TRANSCRIBE_WORKERS = 2             # Whisper는 메모리 집약적
+RENDER_WORKERS = None              # None = cpu_count // 2
