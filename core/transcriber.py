@@ -40,17 +40,32 @@ def _load_one_model():
 
 
 def init_model_pool(n: int = 1):
-    """n개의 Whisper 모델 인스턴스를 미리 로드해 풀에 적재."""
+    """
+    n개의 Whisper 모델 인스턴스를 미리 로드해 풀에 적재.
+    VRAM OOM 발생 시 그 전까지 로드된 수로 자동 조정.
+    """
     global _pool
     with _pool_lock:
         if _pool is not None:
             return
-        print(f"  Whisper 모델 로드 중: {WHISPER_MODEL} × {n}개 인스턴스")
+        print(f"  Whisper 모델 로드 중: {WHISPER_MODEL} × 최대 {n}개 인스턴스")
         _pool = queue.Queue()
+        loaded = 0
         for i in range(n):
-            model, device = _load_one_model()
-            _pool.put(model)
-            print(f"  ✓ 인스턴스 {i+1}/{n} 로드 완료 ({device.upper()})")
+            try:
+                model, device = _load_one_model()
+                _pool.put(model)
+                loaded += 1
+                print(f"  ✓ 인스턴스 {loaded}/{n} 로드 완료 ({device.upper()})")
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower():
+                    print(f"  VRAM 부족으로 {loaded}개 인스턴스로 제한 (요청 {n}개)")
+                    break
+                raise
+        if loaded == 0:
+            raise RuntimeError("Whisper 모델을 하나도 로드할 수 없습니다. VRAM을 확인하세요.")
+        if loaded < n:
+            print(f"  → TRANSCRIBE_WORKERS={loaded} 으로 실행합니다. (.env에서 조정 가능)")
 
 
 def _get_pool() -> queue.Queue:

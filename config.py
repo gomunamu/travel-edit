@@ -50,6 +50,6 @@ CLAUDE_MAX_CONCURRENT = 5          # 동시 API 호출 수
 # === 병렬 처리 설정 ===
 METADATA_WORKERS = 8
 SEGMENT_WORKERS = None             # None = max(4, cpu_count) — 전체 세그먼트 단일 풀 병렬
-TRANSCRIBE_WORKERS = 8             # GPU VRAM 여유분에 맞게 조정 — GPU util이 낮으면 늘릴 것
-                                   # (large-v3 첫 로드 후 실제 점유는 ~400MB/인스턴스 수준)
+TRANSCRIBE_WORKERS = 8             # 실제 로드 가능한 수는 VRAM에 따라 자동 제한됨
+                                   # OOM 발생 시 로드된 인스턴스 수로 자동 조정
 RENDER_WORKERS = None              # None = cpu_count // 2
