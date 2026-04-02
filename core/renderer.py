@@ -2,10 +2,17 @@
 import subprocess
 import os
 import tempfile
+import threading
 from pathlib import Path
 from typing import List, Tuple, Optional
 
 from config import OUTPUT_RESOLUTION, CRF, FFMPEG_PRESET
+
+try:
+    from tqdm import tqdm as _tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
 
 
 def get_day_resolution(clips: List[dict]) -> Tuple[int, int]:
@@ -145,34 +152,113 @@ def is_valid_video(path: str) -> bool:
     return result.returncode == 0 and result.stdout.strip() != b""
 
 
-def concat_day(segment_paths: List[str], output_path: str) -> bool:
-    """하루 분량 세그먼트를 하나로 합치기 (stream copy)"""
+def concat_day(segment_paths: List[str], output_path: str,
+               clip_durations: List[float] = None) -> bool:
+    """하루 분량 세그먼트를 하나로 합치기 (stream copy).
+
+    clip_durations 를 넘기면 ffmpeg progress 파이프를 파싱해 클립 단위 프로그레스 바 표시.
+    """
+    n = len(segment_paths)
+
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
         concat_file = f.name
         for p in segment_paths:
             # concat demuxer requires escaped absolute paths
-            # (relative paths are resolved relative to the concat file's location,
-            #  which is /tmp/ when using tempfile — so always use absolute paths)
             abs_p = os.path.abspath(p)
             escaped = abs_p.replace("\\", "/").replace("'", "\\'")
             f.write(f"file '{escaped}'\n")
 
+    # 누적 타임라인 경계 계산 (어느 시각이 몇 번째 클립인지 매핑)
+    boundaries: List[float] = []
+    if clip_durations:
+        t = 0.0
+        for d in clip_durations:
+            t += d
+            boundaries.append(t)
+
+    use_progress = bool(boundaries) and HAS_TQDM
+
     try:
-        cmd = [
-            "ffmpeg", "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", concat_file,
-            "-c", "copy",
-            "-movflags", "+faststart",
-            output_path
-        ]
-        result = subprocess.run(cmd, capture_output=True)
-        if result.returncode != 0:
-            err = result.stderr[-400:].decode(errors="replace")
-            print(f"  [오류] 병합 실패: {err}")
-            return False
-        return True
+        if use_progress:
+            r_fd, w_fd = os.pipe()
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_file,
+                "-c", "copy",
+                "-movflags", "+faststart",
+                "-progress", f"pipe:{w_fd}",
+                "-nostats",
+                output_path,
+            ]
+        else:
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_file,
+                "-c", "copy",
+                "-movflags", "+faststart",
+                output_path,
+            ]
+
+        if use_progress:
+            pbar = _tqdm(total=n, desc="  병합", unit="클립")
+            current = [0]  # mutable cell for thread
+
+            def _watch_progress():
+                try:
+                    with os.fdopen(r_fd, "r") as pipe:
+                        for line in pipe:
+                            if not line.startswith("out_time="):
+                                continue
+                            # out_time 형식: HH:MM:SS.XXXXXX
+                            try:
+                                ts = line.split("=", 1)[1].strip()
+                                h, m, s = ts.split(":")
+                                out_sec = int(h) * 3600 + int(m) * 60 + float(s)
+                            except (ValueError, IndexError):
+                                continue
+                            # 현재 클립 인덱스 계산
+                            new_idx = next(
+                                (i for i, b in enumerate(boundaries) if out_sec < b),
+                                n - 1
+                            )
+                            if new_idx > current[0]:
+                                pbar.update(new_idx - current[0])
+                                current[0] = new_idx
+                except OSError:
+                    pass
+
+            watcher = threading.Thread(target=_watch_progress, daemon=True)
+            watcher.start()
+
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                pass_fds=(w_fd,),
+            )
+            os.close(w_fd)   # 부모 프로세스에서 쓰기 끝 닫기
+            proc.wait()
+            watcher.join(timeout=5)
+
+            # 마지막 클립까지 채워줌
+            if current[0] < n:
+                pbar.update(n - current[0])
+            pbar.close()
+
+            if proc.returncode != 0:
+                err = (proc.stderr.read() if proc.stderr else b"")[-400:].decode(errors="replace")
+                print(f"  [오류] 병합 실패: {err}")
+                return False
+            return True
+        else:
+            result = subprocess.run(cmd, capture_output=True)
+            if result.returncode != 0:
+                err = result.stderr[-400:].decode(errors="replace")
+                print(f"  [오류] 병합 실패: {err}")
+                return False
+            return True
     finally:
         try:
             os.unlink(concat_file)

@@ -403,8 +403,11 @@ def render_day(
         print(f"  → {day_key}: 렌더링된 클립 없음")
         return False
 
+    clip_durations = [
+        args[0]["trim_end"] - args[0]["trim_start"] for args in included
+    ]
     print(f"  병합 중: {len(clip_paths)}개 → {Path(output_path).name}")
-    ok = concat_day(clip_paths, output_path)
+    ok = concat_day(clip_paths, output_path, clip_durations=clip_durations)
 
     # SRT 모드: 병합 성공 후 타임라인 맞춰 단일 SRT 파일 생성
     if ok and _config.SUBTITLE_MODE == "srt":
