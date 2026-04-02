@@ -16,7 +16,7 @@ from config import (
 )
 from core.cache import Cache, make_clip_hash
 from core.metadata import get_video_info, is_video
-from core.segmenter import split_clip
+from core.segmenter import plan_segments, extract_segment
 from core.transcriber import transcribe, init_model_pool
 from core.evaluator import evaluate_clip
 from core.geocoder import coords_to_str
@@ -88,43 +88,69 @@ def extract_all_metadata(video_files: List[str], cache: Cache) -> List[dict]:
     return results
 
 
-# ─── 3. 세그먼트 분할 (클립 간 병렬, 클립 내부도 병렬) ──────────────────────
+# ─── 3. 세그먼트 분할 (전체 세그먼트 단일 풀 병렬) ──────────────────────────
 def segment_all(clips: List[dict], segments_dir: str, cache: Cache) -> List[dict]:
-    # 워커 수 결정:
-    #   - 클립 간(outer): 각 클립이 독립적이므로 파일 수만큼 병렬
-    #   - 클립 내(inner): 한 클립의 세그먼트들, 같은 소스 파일 읽기
-    # outer * inner 가 총 ffmpeg 프로세스 수 → 디스크 I/O 포화 방지
+    """
+    모든 클립의 분할 계획을 먼저 수립한 뒤,
+    전체 세그먼트를 단일 ThreadPool로 병렬 추출한다.
+    2단계(outer/inner) 대신 플랫 풀을 사용해 클립 크기 불균형과 무관하게
+    CPU/I/O를 고르게 활용한다.
+    """
     cpu = os.cpu_count() or 4
-    outer = SEGMENT_WORKERS or max(2, cpu // 2)
-    inner = max(2, cpu // outer)          # 전체 프로세스 수 ≒ cpu 수 유지
+    workers = SEGMENT_WORKERS or max(4, cpu)
 
-    needs_split = [c for c in clips if c["duration"] > 0]
+    out_dir = Path(segments_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    results: List[tuple] = []  # (original_index, segs)
+    # 1단계: 계획 수립 (I/O 없음)
+    clip_plans: List[tuple] = []   # (original_idx, plan)
+    for idx, clip in enumerate(clips):
+        if clip["duration"] <= 0:
+            continue
+        plan = plan_segments(clip, out_dir)
+        clip_plans.append((idx, plan))
 
-    def _split_one(idx_clip):
-        idx, clip = idx_clip
-        segs = split_clip(clip, segments_dir, inner_workers=inner)
-        for seg in segs:
-            if seg["clip_hash"] != clip["clip_hash"]:
-                if not cache.load(seg["clip_hash"], "meta"):
-                    cache.save(seg["clip_hash"], "meta", seg)
-        return idx, segs
+    # 2단계: 추출이 필요한 세그먼트만 모아 단일 풀에서 병렬 실행
+    jobs = [
+        seg for _, plan in clip_plans
+        for seg in plan
+        if "_src" in seg                                  # 분할 대상만
+        and (not Path(seg["filepath"]).exists()
+             or Path(seg["filepath"]).stat().st_size < 10_000)
+    ]
 
-    with ThreadPoolExecutor(max_workers=outer) as ex:
-        futures = {ex.submit(_split_one, (i, c)): i for i, c in enumerate(needs_split)}
-        for future in _tqdm(as_completed(futures), total=len(futures), desc="  클립 분할"):
-            try:
-                idx, segs = future.result()
-                results.append((idx, segs))
-            except Exception as e:
-                orig_idx = futures[future]
-                clip_name = needs_split[orig_idx].get("filename", "?")
-                print(f"\n  [경고] 클립 분할 실패, 건너뜀: {clip_name}\n    {e}")
+    failed_paths: set = set()
 
-    # 원본 순서(촬영 시간 순) 복원
-    results.sort(key=lambda x: x[0])
-    all_segs = [seg for _, segs in results for seg in segs]
+    if jobs:
+        n_long = sum(1 for _, plan in clip_plans if any("_src" in s for s in plan))
+        print(f"  분할 대상: {len(jobs)}개 세그먼트 / {n_long}개 클립 (워커 {workers}개)")
+
+        def _do(seg):
+            extract_segment(seg["_src"], seg["_seg_start"], seg["duration"], seg["filepath"])
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(_do, seg): seg for seg in jobs}
+            for future in _tqdm(as_completed(futures), total=len(futures), desc="  클립 분할"):
+                seg = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"\n  [경고] 세그먼트 추출 실패, 건너뜀: {Path(seg['filepath']).name}\n    {e}")
+                    failed_paths.add(seg["filepath"])
+
+    # 3단계: 원본 순서 복원, 임시 키 제거, 캐시 저장
+    clip_plans.sort(key=lambda x: x[0])
+    all_segs: List[dict] = []
+    for _, plan in clip_plans:
+        for seg in plan:
+            seg.pop("_src", None)
+            seg.pop("_seg_start", None)
+            if seg["filepath"] in failed_paths:
+                continue
+            if seg.get("parent_hash") and not cache.load(seg["clip_hash"], "meta"):
+                cache.save(seg["clip_hash"], "meta", seg)
+            all_segs.append(seg)
+
     return all_segs
 
 
