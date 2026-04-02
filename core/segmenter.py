@@ -1,12 +1,42 @@
-"""긴 클립을 일정 길이 세그먼트로 분할 (클립 간/내부 병렬 처리)"""
-import os
+"""긴 클립을 일정 길이 세그먼트로 분할"""
 import subprocess
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List
 
 from config import MAX_SEGMENT_DURATION, MIN_SEGMENT_DURATION
 from core.cache import make_segment_hash
+
+
+def _ffmpeg_worker(args: tuple) -> str:
+    """
+    ProcessPoolExecutor용 모듈 레벨 워커 (picklable).
+    같은 소스 파일의 세그먼트들을 시작 시간 순으로 순차 처리해
+    HDD seek를 최소화한다.
+    반환값: 실패한 경로들의 집합(set)
+    """
+    segs = args  # list of (src, start, duration, dst)
+    failed = set()
+    for src, start, duration, dst in segs:
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", f"{start:.3f}",
+            "-i", src,
+            "-t", f"{duration:.3f}",
+            "-c", "copy",
+            "-avoid_negative_ts", "make_zero",
+            "-loglevel", "error",
+            dst,
+        ]
+        # stdout/stderr=DEVNULL → posix_spawn 사용 가능 → fork 직렬화 없음
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            failed.add(dst)
+    return failed
 
 
 def plan_segments(clip: dict, out_dir: Path) -> List[dict]:
@@ -68,9 +98,15 @@ def extract_segment(src: str, start: float, duration: float, dst: str):
         "-t", f"{duration:.3f}",
         "-c", "copy",
         "-avoid_negative_ts", "make_zero",
+        "-loglevel", "error",
         dst,
     ]
-    result = subprocess.run(cmd, capture_output=True, timeout=300)
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        timeout=300,
+    )
     if result.returncode != 0:
         raise RuntimeError(
             f"세그먼트 분할 실패: {result.stderr[-500:].decode(errors='replace')}"

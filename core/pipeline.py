@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from datetime import datetime, timezone
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import List, Dict, Optional
 import threading
 
@@ -16,7 +16,7 @@ from config import (
 )
 from core.cache import Cache, make_clip_hash
 from core.metadata import get_video_info, is_video
-from core.segmenter import plan_segments, extract_segment
+from core.segmenter import plan_segments, extract_segment, _ffmpeg_worker
 from core.transcriber import transcribe, init_model_pool
 from core.evaluator import evaluate_clip
 from core.geocoder import coords_to_str
@@ -88,13 +88,15 @@ def extract_all_metadata(video_files: List[str], cache: Cache) -> List[dict]:
     return results
 
 
-# ─── 3. 세그먼트 분할 (전체 세그먼트 단일 풀 병렬) ──────────────────────────
+# ─── 3. 세그먼트 분할 (ProcessPoolExecutor + 파일별 그룹화) ─────────────────
 def segment_all(clips: List[dict], segments_dir: str, cache: Cache) -> List[dict]:
     """
-    모든 클립의 분할 계획을 먼저 수립한 뒤,
-    전체 세그먼트를 단일 ThreadPool로 병렬 추출한다.
-    2단계(outer/inner) 대신 플랫 풀을 사용해 클립 크기 불균형과 무관하게
-    CPU/I/O를 고르게 활용한다.
+    분할 전략:
+    - ThreadPoolExecutor 대신 ProcessPoolExecutor 사용
+      → subprocess.run 이 fork()를 직렬화하는 Python 스레딩 한계를 우회
+    - 같은 소스 파일의 세그먼트를 하나의 워커에 묶어 시간순 처리
+      → HDD seek 최소화 (앞에서 뒤로 순방향 읽기)
+    - 서로 다른 소스 파일은 workers 개수만큼 동시 처리
     """
     cpu = os.cpu_count() or 4
     workers = SEGMENT_WORKERS or max(4, cpu)
@@ -103,42 +105,54 @@ def segment_all(clips: List[dict], segments_dir: str, cache: Cache) -> List[dict
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # 1단계: 계획 수립 (I/O 없음)
-    clip_plans: List[tuple] = []   # (original_idx, plan)
+    clip_plans: List[tuple] = []
     for idx, clip in enumerate(clips):
         if clip["duration"] <= 0:
             continue
         plan = plan_segments(clip, out_dir)
         clip_plans.append((idx, plan))
 
-    # 2단계: 추출이 필요한 세그먼트만 모아 단일 풀에서 병렬 실행
-    jobs = [
-        seg for _, plan in clip_plans
-        for seg in plan
-        if "_src" in seg                                  # 분할 대상만
-        and (not Path(seg["filepath"]).exists()
-             or Path(seg["filepath"]).stat().st_size < 10_000)
+    # 2단계: 추출이 필요한 세그먼트를 소스 파일별로 그룹화
+    from collections import defaultdict
+    by_src: dict = defaultdict(list)
+    for _, plan in clip_plans:
+        for seg in plan:
+            if "_src" not in seg:
+                continue
+            dst = seg["filepath"]
+            if Path(dst).exists() and Path(dst).stat().st_size >= 10_000:
+                continue  # 이미 존재
+            by_src[seg["_src"]].append(
+                (seg["_src"], seg["_seg_start"], seg["duration"], dst)
+            )
+
+    # 각 파일 내 세그먼트를 시작 시간 순 정렬 (순방향 seek)
+    file_groups = [
+        sorted(segs, key=lambda x: x[1])   # sort by start time
+        for segs in by_src.values()
+        if segs
     ]
 
     failed_paths: set = set()
 
     n_short = sum(1 for _, plan in clip_plans if not any("_src" in s for s in plan))
-    n_long  = sum(1 for _, plan in clip_plans if any("_src" in s for s in plan))
+    n_long  = len(by_src)
+    n_segs  = sum(len(g) for g in file_groups)
     print(f"  {n_short}개 클립: 분할 불필요 (30초 이하)")
-    if jobs:
-        print(f"  {n_long}개 클립: {len(jobs)}개 세그먼트로 분할 → 워커 {workers}개 병렬 처리")
 
-        def _do(seg):
-            extract_segment(seg["_src"], seg["_seg_start"], seg["duration"], seg["filepath"])
-
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = {ex.submit(_do, seg): seg for seg in jobs}
+    if file_groups:
+        print(f"  {n_long}개 클립: {n_segs}개 세그먼트 → ProcessPool {workers}개 병렬 분할")
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(_ffmpeg_worker, tuple(g)): g for g in file_groups}
             for future in _tqdm(as_completed(futures), total=len(futures), desc="  클립 분할"):
-                seg = futures[future]
                 try:
-                    future.result()
+                    failed = future.result()
+                    failed_paths.update(failed)
+                    if failed:
+                        for dst in failed:
+                            print(f"\n  [경고] 분할 실패: {Path(dst).name}")
                 except Exception as e:
-                    print(f"\n  [경고] 세그먼트 추출 실패, 건너뜀: {Path(seg['filepath']).name}\n    {e}")
-                    failed_paths.add(seg["filepath"])
+                    print(f"\n  [경고] 워커 오류: {e}")
 
     # 3단계: 원본 순서 복원, 임시 키 제거, 캐시 저장
     clip_plans.sort(key=lambda x: x[0])
