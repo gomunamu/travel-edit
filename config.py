@@ -47,9 +47,11 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = "claude-sonnet-4-6"
 CLAUDE_MAX_CONCURRENT = 5          # 동시 API 호출 수
 
-# === OpenAI 설정 (Claude rate limit 시 폴백) ===
+# === OpenAI / Gemini 설정 (rate limit 시 라운드로빈 폴백) ===
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL   = os.environ.get("OPENAI_MODEL",   "gpt-4o-mini")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL   = os.environ.get("GEMINI_MODEL",   "gemini-1.5-flash")
 
 # === 병렬 처리 설정 ===
 METADATA_WORKERS = 8
