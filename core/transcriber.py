@@ -14,7 +14,7 @@ _pool_lock = threading.Lock()
 
 
 def _load_one_model():
-    from faster_whisper import WhisperModel
+    from faster_whisper import WhisperModel, BatchedInferencePipeline
     import ctranslate2
 
     device = WHISPER_DEVICE
@@ -28,13 +28,15 @@ def _load_one_model():
         elif compute not in ctranslate2.get_supported_compute_types("cuda"):
             compute = "float16"
 
-    return WhisperModel(
+    base = WhisperModel(
         WHISPER_MODEL,
         device=device,
         compute_type=compute,
         num_workers=1,
         cpu_threads=4,
-    ), device
+    )
+    # BatchedInferencePipeline: 오디오 청크를 GPU에서 병렬 처리 → 특히 긴 파일에서 빠름
+    return BatchedInferencePipeline(model=base), device
 
 
 def init_model_pool(n: int = 1):
@@ -99,34 +101,25 @@ def _transcribe_with(model, video_path: str, force_lang: str = None) -> dict:
         if not Path(wav_path).exists() or Path(wav_path).stat().st_size < 1000:
             return _empty_transcript()
 
-        segments_iter, info = model.transcribe(
-            wav_path,
-            language=whisper_lang,  # None=자동감지, 지정 시 해당 언어로 강제
+        _transcribe_kwargs = dict(
+            language=whisper_lang,
+            batch_size=16,
             beam_size=5,
-            best_of=5,
             vad_filter=True,
             vad_parameters=dict(
                 min_silence_duration_ms=600,
                 speech_pad_ms=400,
             ),
             word_timestamps=True,
-            condition_on_previous_text=True,
+            condition_on_previous_text=False,  # 독립 클립이므로 컨텍스트 불필요
         )
+
+        segments_iter, info = model.transcribe(wav_path, **_transcribe_kwargs)
 
         # auto 모드: 한국어/영어 외 감지되면 한국어로 재시도
         if whisper_lang is None and info.language not in ("ko", "en"):
             segments_iter, info = model.transcribe(
-                wav_path,
-                language="ko",
-                beam_size=5,
-                best_of=5,
-                vad_filter=True,
-                vad_parameters=dict(
-                    min_silence_duration_ms=600,
-                    speech_pad_ms=400,
-                ),
-                word_timestamps=True,
-                condition_on_previous_text=True,
+                wav_path, **{**_transcribe_kwargs, "language": "ko"}
             )
 
         segments = []
