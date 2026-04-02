@@ -167,7 +167,7 @@ def concat_day(segment_paths: List[str], output_path: str) -> bool:
             "-movflags", "+faststart",
             output_path
         ]
-        result = subprocess.run(cmd, capture_output=True, timeout=600)
+        result = subprocess.run(cmd, capture_output=True)
         if result.returncode != 0:
             err = result.stderr[-400:].decode(errors="replace")
             print(f"  [오류] 병합 실패: {err}")
