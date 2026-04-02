@@ -116,26 +116,47 @@ def _transcribe_with(model, video_path: str, force_lang: str = None) -> dict:
         if not Path(wav_path).exists() or Path(wav_path).stat().st_size < 1000:
             return _empty_transcript()
 
-        _transcribe_kwargs = dict(
-            language=whisper_lang,
-            batch_size=16,
-            beam_size=5,
-            vad_filter=True,
-            vad_parameters=dict(
-                min_silence_duration_ms=600,
-                speech_pad_ms=400,
-            ),
-            word_timestamps=True,
-            condition_on_previous_text=False,  # 독립 클립이므로 컨텍스트 불필요
-        )
+        def _run_transcribe(lang, batch_size=4):
+            kwargs = dict(
+                language=lang,
+                batch_size=batch_size,
+                beam_size=5,
+                vad_filter=True,
+                vad_parameters=dict(
+                    min_silence_duration_ms=600,
+                    speech_pad_ms=400,
+                ),
+                word_timestamps=True,
+                condition_on_previous_text=False,
+            )
+            return model.transcribe(wav_path, **kwargs)
 
-        segments_iter, info = model.transcribe(wav_path, **_transcribe_kwargs)
+        # CUDA OOM 시 batch_size 줄여서 재시도
+        for batch_size in (4, 2, 1):
+            try:
+                segments_iter, info = _run_transcribe(whisper_lang, batch_size)
+                break
+            except RuntimeError as e:
+                err = str(e).lower()
+                if any(k in err for k in ("out of memory", "cublas", "cuda")):
+                    if batch_size == 1:
+                        raise
+                    continue
+                raise
 
         # auto 모드: 한국어/영어 외 감지되면 한국어로 재시도
         if whisper_lang is None and info.language not in ("ko", "en"):
-            segments_iter, info = model.transcribe(
-                wav_path, **{**_transcribe_kwargs, "language": "ko"}
-            )
+            for batch_size in (4, 2, 1):
+                try:
+                    segments_iter, info = _run_transcribe("ko", batch_size)
+                    break
+                except RuntimeError as e:
+                    err = str(e).lower()
+                    if any(k in err for k in ("out of memory", "cublas", "cuda")):
+                        if batch_size == 1:
+                            raise
+                        continue
+                    raise
 
         segments = []
         for seg in segments_iter:
