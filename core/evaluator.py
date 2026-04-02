@@ -13,7 +13,7 @@ EVAL_PROMPT = """다음 클립 정보를 분석하고 편집 결정을 내려주
 
 ## 클립 정보
 - 길이: {duration:.1f}초
-- 해상도: {width}x{height} {'(세로 영상)' if is_portrait else '(가로 영상)'}
+- 해상도: {width}x{height} {orientation}
 - 음성 여부: {has_speech}
 - 음성 구간 길이: {speech_sec:.1f}초
 
@@ -74,7 +74,7 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
         duration=duration,
         width=w,
         height=h,
-        is_portrait=is_portrait,
+        orientation="(세로 영상)" if is_portrait else "(가로 영상)",
         has_speech="있음" if has_speech else "없음",
         speech_sec=speech_sec,
         transcript_text=transcript_text,
