@@ -3,7 +3,11 @@ import json
 import re
 from typing import Optional
 
-from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, MIN_SEGMENT_DURATION, PURE_LANDSCAPE_THRESHOLD
+from config import (
+    ANTHROPIC_API_KEY, CLAUDE_MODEL,
+    OPENAI_API_KEY, OPENAI_MODEL,
+    MIN_SEGMENT_DURATION, PURE_LANDSCAPE_THRESHOLD,
+)
 
 SYSTEM_PROMPT = """당신은 10년 경력의 여행 브이로그 편집자이자 방송국 PD입니다.
 여행 동영상의 각 클립을 분석하고, 최종 편집본에 포함할지 결정합니다.
@@ -81,6 +85,37 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
         threshold=PURE_LANDSCAPE_THRESHOLD,
     )
 
+    result = _call_claude(prompt, duration)
+    if result is not None:
+        return result
+
+    # Claude 실패(rate limit 등) → OpenAI 폴백
+    if OPENAI_API_KEY:
+        result = _call_openai(prompt, duration)
+        if result is not None:
+            return result
+
+    return _rule_based_eval(duration, has_speech, speech_sec)
+
+
+def _parse_response(text: str, duration: float) -> Optional[dict]:
+    match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+    if not match:
+        return None
+    try:
+        result = json.loads(match.group())
+        return {
+            "decision": result.get("decision", "keep"),
+            "reason": result.get("reason", ""),
+            "keep_start": float(result.get("keep_start", 0)),
+            "keep_end": float(result.get("keep_end", duration)),
+            "interest_score": int(result.get("interest_score", 5)),
+        }
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _call_claude(prompt: str, duration: float) -> Optional[dict]:
     try:
         from anthropic import Anthropic
         client = Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -90,23 +125,32 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}]
         )
-        text = message.content[0].text.strip()
-
-        # JSON 추출
-        match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-        if match:
-            result = json.loads(match.group())
-            return {
-                "decision": result.get("decision", "keep"),
-                "reason": result.get("reason", ""),
-                "keep_start": float(result.get("keep_start", 0)),
-                "keep_end": float(result.get("keep_end", duration)),
-                "interest_score": int(result.get("interest_score", 5)),
-            }
+        return _parse_response(message.content[0].text.strip(), duration)
     except Exception as e:
-        print(f"  [경고] Claude 평가 실패: {e}, 규칙 기반으로 대체")
+        err = str(e)
+        if "429" in err or "rate_limit" in err:
+            print(f"  [rate limit] Claude → OpenAI 폴백")
+        else:
+            print(f"  [경고] Claude 평가 실패: {e}")
+        return None
 
-    return _rule_based_eval(duration, has_speech, speech_sec)
+
+def _call_openai(prompt: str, duration: float) -> Optional[dict]:
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        message = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            max_tokens=256,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ]
+        )
+        return _parse_response(message.choices[0].message.content.strip(), duration)
+    except Exception as e:
+        print(f"  [경고] OpenAI 평가 실패: {e}")
+        return None
 
 
 def _rule_based_eval(duration: float, has_speech: bool, speech_sec: float) -> dict:

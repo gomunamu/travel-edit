@@ -47,6 +47,10 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = "claude-sonnet-4-6"
 CLAUDE_MAX_CONCURRENT = 5          # 동시 API 호출 수
 
+# === OpenAI 설정 (Claude rate limit 시 폴백) ===
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+
 # === 병렬 처리 설정 ===
 METADATA_WORKERS = 8
 SEGMENT_WORKERS = None             # None = max(4, cpu_count) — 전체 세그먼트 단일 풀 병렬
