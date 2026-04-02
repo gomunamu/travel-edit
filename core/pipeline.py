@@ -121,9 +121,11 @@ def segment_all(clips: List[dict], segments_dir: str, cache: Cache) -> List[dict
 
     failed_paths: set = set()
 
+    n_short = sum(1 for _, plan in clip_plans if not any("_src" in s for s in plan))
+    n_long  = sum(1 for _, plan in clip_plans if any("_src" in s for s in plan))
+    print(f"  {n_short}개 클립: 분할 불필요 (30초 이하)")
     if jobs:
-        n_long = sum(1 for _, plan in clip_plans if any("_src" in s for s in plan))
-        print(f"  분할 대상: {len(jobs)}개 세그먼트 / {n_long}개 클립 (워커 {workers}개)")
+        print(f"  {n_long}개 클립: {len(jobs)}개 세그먼트로 분할 → 워커 {workers}개 병렬 처리")
 
         def _do(seg):
             extract_segment(seg["_src"], seg["_seg_start"], seg["duration"], seg["filepath"])
