@@ -120,21 +120,9 @@ def _parse_gps(tags: dict) -> Optional[tuple]:
 
 
 def _check_file_integrity(filepath: str) -> Optional[str]:
-    """사전 검사: 복구 불가 상태를 ffprobe 전에 감지. 문제 있으면 이유 문자열 반환."""
-    p = Path(filepath)
-    if p.stat().st_size == 0:
+    """사전 검사: 빈 파일만 필터링. moov atom 검사는 NAS에서 너무 느려 ffprobe에 위임."""
+    if Path(filepath).stat().st_size == 0:
         return "빈 파일 (0 bytes) — 전송/기록 실패"
-    # MP4/MOV: moov atom 존재 여부 확인 (파일 앞뒤 4MB만 검사)
-    if p.suffix.lower() in (".mp4", ".mov", ".m4v"):
-        try:
-            with open(filepath, "rb") as f:
-                head = f.read(4 * 1024 * 1024)
-                f.seek(max(0, p.stat().st_size - 4 * 1024 * 1024))
-                tail = f.read()
-            if b"moov" not in head and b"moov" not in tail:
-                return "moov atom 없음 — 녹화 중 강제 종료된 것으로 보임 (복구 불가)"
-        except OSError:
-            pass
     return None
 
 

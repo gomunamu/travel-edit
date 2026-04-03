@@ -16,7 +16,7 @@ MIN_SEGMENT_DURATION = 2           # 이 시간(초) 미만은 자동 버림
 PURE_LANDSCAPE_THRESHOLD = 10      # 음성 없이 이 시간(초) 이상이면 AI가 컷 평가
 
 # === 출력 설정 ===
-OUTPUT_RESOLUTION = (1920, 1080)   # 출력 해상도
+OUTPUT_RESOLUTION = (720, 480)   # 출력 해상도
 OUTPUT_FPS = 30
 CRF = 18                           # 화질 (낮을수록 좋음, 18 = 거의 무손실)
 FFMPEG_PRESET = "fast"
@@ -54,7 +54,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL   = os.environ.get("GEMINI_MODEL",   "gemini-1.5-flash")
 
 # === 병렬 처리 설정 ===
-METADATA_WORKERS = 8
+METADATA_WORKERS = 32          # NAS 환경: I/O 대기가 대부분 → 많을수록 유리
 SEGMENT_WORKERS = None             # None = max(4, cpu_count) — 전체 세그먼트 단일 풀 병렬
 TRANSCRIBE_WORKERS = 8             # 실제 로드 가능한 수는 VRAM에 따라 자동 제한됨
                                    # OOM 발생 시 로드된 인스턴스 수로 자동 조정
