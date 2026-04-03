@@ -104,6 +104,10 @@ def main():
         choices=["overlay", "srt"],
         help="자막 방식 (overlay=영상 번인, srt=별도 .srt 파일 / 기본: overlay)"
     )
+    parser.add_argument(
+        "--no-stt-refine", action="store_true",
+        help="STT 결과 LLM 정제 비활성화 (기본: 활성화)"
+    )
 
     args = parser.parse_args()
 
@@ -124,6 +128,8 @@ def main():
         config.SUBTITLE_MODE = args.subtitle_mode
     if args.skip_transcribe:
         config.SUBTITLE_LANG = "off"
+    if args.no_stt_refine:
+        config.STT_REFINE = False
 
     # 의존성 확인
     check_dependencies()
@@ -148,9 +154,12 @@ def main():
         lang_label  = {"auto": "자동(한/영)", "ko": "한국어", "en": "영어",
                        "ja": "일본어", "zh": "중국어"}.get(config.SUBTITLE_LANG, config.SUBTITLE_LANG)
         mode_label  = {"overlay": "영상 번인", "srt": "별도 SRT 파일"}.get(config.SUBTITLE_MODE, config.SUBTITLE_MODE)
+        refine_label = "ON" if config.STT_REFINE else "OFF"
+        refine_src   = "CLI 인수" if args.no_stt_refine else ".env / 기본값"
         print(f"[음성인식] Whisper 모델: {config.WHISPER_MODEL}  ({whisper_src})")
         print(f"           디바이스: {config.WHISPER_DEVICE.upper()}  |  연산타입: {config.WHISPER_COMPUTE_TYPE}")
-        print(f"[자막]     언어: {lang_label} ({lang_src})  |  방식: {mode_label} ({mode_src})\n")
+        print(f"[자막]     언어: {lang_label} ({lang_src})  |  방식: {mode_label} ({mode_src})")
+        print(f"[STT 정제] {refine_label}  모델: {config.STT_REFINE_MODEL}  ({refine_src})\n")
 
     from core.pipeline import run
     run(args.input, args.output)

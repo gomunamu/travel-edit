@@ -20,6 +20,7 @@ from core.cache import Cache, make_clip_hash
 from core.metadata import get_video_info, is_video
 from core.segmenter import plan_segments
 from core.transcriber import transcribe, init_model_pool, get_pool_size, release_model_pool
+from core.refiner import refine_transcript
 from core.evaluator import evaluate_clip
 from core.geocoder import coords_to_str
 from core.subtitle import make_subtitle_ass, make_subtitle_srt, make_location_ass
@@ -214,6 +215,65 @@ def transcribe_all(segments: List[dict], cache: Cache) -> Dict[str, dict]:
         pbar.close()
 
     return transcripts
+
+
+# ─── 4-b. STT 정제 (LLM 교정) ─────────────────────────────────────────────
+def refine_all(
+    segments: List[dict],
+    transcripts: Dict[str, dict],
+    cache: Cache,
+) -> Dict[str, dict]:
+    """
+    Whisper 결과를 Claude로 한 번 더 정제한다.
+    캐시 키: "transcript_refined" — 재실행 시 재사용.
+    """
+    from config import ANTHROPIC_API_KEY, STT_REFINE_MODEL, CLAUDE_MAX_CONCURRENT
+
+    refined_map: Dict[str, dict] = {}
+    need_refine = []
+
+    for seg in segments:
+        h = seg["clip_hash"]
+        if h not in transcripts:
+            continue
+        cached = cache.load(h, "transcript_refined")
+        if cached:
+            refined_map[h] = cached
+        else:
+            need_refine.append(seg)
+
+    if not need_refine:
+        # 정제 캐시가 없는 세그먼트는 원본 사용
+        for h, t in transcripts.items():
+            if h not in refined_map:
+                refined_map[h] = t
+        return refined_map
+
+    print(f"  STT 정제 필요: {len(need_refine)}개 (캐시 {len(refined_map)}개 재사용)")
+
+    lock = threading.Lock()
+    semaphore = threading.Semaphore(CLAUDE_MAX_CONCURRENT)
+
+    def _refine_one(seg):
+        h = seg["clip_hash"]
+        original = transcripts[h]
+        with semaphore:
+            result = refine_transcript(original, ANTHROPIC_API_KEY, STT_REFINE_MODEL)
+        cache.save(h, "transcript_refined", result)
+        with lock:
+            refined_map[h] = result
+
+    with ThreadPoolExecutor(max_workers=CLAUDE_MAX_CONCURRENT) as ex:
+        futures = [ex.submit(_refine_one, seg) for seg in need_refine]
+        for future in _tqdm(as_completed(futures), total=len(futures), desc="  STT 정제"):
+            future.result()
+
+    # 정제 대상 아닌 세그먼트는 원본 사용
+    for h, t in transcripts.items():
+        if h not in refined_map:
+            refined_map[h] = t
+
+    return refined_map
 
 
 # ─── 5. AI 평가 (병렬 - Claude API) ───────────────────────────────────────
@@ -428,6 +488,13 @@ def run(input_folder: str, output_folder: str):
     else:
         transcripts = transcribe_all(segments, cache)
         release_model_pool()   # GPU 메모리 해제 → 렌더링에서 활용 가능
+
+        # 4-b. STT 정제
+        if _config.STT_REFINE and _config.ANTHROPIC_API_KEY:
+            print(f"\n[4-b] STT 정제 (LLM: {_config.STT_REFINE_MODEL})...")
+            transcripts = refine_all(segments, transcripts, cache)
+        elif _config.STT_REFINE and not _config.ANTHROPIC_API_KEY:
+            print("\n[4-b] STT 정제 건너뜀 (ANTHROPIC_API_KEY 없음)")
 
     # 5. AI 평가
     print("\n[5/6] AI 클립 평가...")

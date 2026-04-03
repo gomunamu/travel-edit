@@ -18,7 +18,7 @@ PURE_LANDSCAPE_THRESHOLD = 10      # 음성 없이 이 시간(초) 이상이면 
 # === 출력 설정 ===
 OUTPUT_RESOLUTION = (720, 480)   # 출력 해상도
 OUTPUT_FPS = 30
-CRF = 18                           # 화질 (낮을수록 좋음, 18 = 거의 무손실)
+CRF = 9                           # 화질 (낮을수록 좋음, 18 = 거의 무손실)
 FFMPEG_PRESET = "fast"
 
 # === 자막 설정 ===
@@ -46,6 +46,11 @@ SUBTITLE_MODE = os.environ.get("SUBTITLE_MODE", "overlay") # overlay|srt
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = "claude-sonnet-4-6"
 CLAUDE_MAX_CONCURRENT = 5          # 동시 API 호출 수
+
+# === STT 정제 설정 ===
+# Whisper 결과를 LLM으로 한 번 더 정제 (외부 소음/한국어 오인식 보정)
+STT_REFINE = os.environ.get("STT_REFINE", "true").lower() not in ("0", "false", "off")
+STT_REFINE_MODEL = os.environ.get("STT_REFINE_MODEL", "claude-haiku-4-5-20251001")
 
 # === OpenAI / Gemini 설정 (rate limit 시 라운드로빈 폴백) ===
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
