@@ -19,7 +19,7 @@ from config import (
 from core.cache import Cache, make_clip_hash
 from core.metadata import get_video_info, is_video
 from core.segmenter import plan_segments
-from core.transcriber import transcribe, init_model_pool
+from core.transcriber import transcribe, init_model_pool, get_pool_size
 from core.evaluator import evaluate_clip
 from core.geocoder import coords_to_str
 from core.subtitle import make_subtitle_ass, make_subtitle_srt, make_location_ass
@@ -164,29 +164,54 @@ def transcribe_all(segments: List[dict], cache: Cache) -> Dict[str, dict]:
 
     print(f"  음성 인식 필요: {len(need_transcribe)}개 (캐시 {len(transcripts)}개 재사용)")
 
-    # 모델 풀 초기화 (TRANSCRIBE_WORKERS 수만큼 인스턴스 로드)
+    # 모델 풀 초기화 (TRANSCRIBE_WORKERS 수만큼 시도, VRAM 부족 시 자동 축소)
     init_model_pool(TRANSCRIBE_WORKERS)
+    actual_workers = get_pool_size()  # 실제 로드된 인스턴스 수로 스레드 수 맞춤
 
     lock = threading.Lock()
+    active: dict = {}   # thread_ident → 표시 이름
+    active_lock = threading.Lock()
 
     _lang_map = {"ko": "ko", "en": "en", "ja": "ja", "zh": "zh"}
     force_lang = _lang_map.get(_config.SUBTITLE_LANG)  # None = auto
 
+    if HAS_TQDM:
+        from tqdm import tqdm as _tqdm_cls
+        pbar = _tqdm_cls(total=len(need_transcribe), desc="  음성 인식")
+    else:
+        pbar = None
+
     def _transcribe_one(seg):
-        h = seg["clip_hash"]
-        # 원본 파일의 해당 구간만 오디오 추출해 Whisper에 전달
         src_start = seg.get("_src_start", 0.0)
-        dur = seg.get("duration")
+        dur = seg.get("duration", 0)
+        # 현재 처리 중인 파일을 프로그레스 바 postfix에 표시
+        label = f"{Path(seg['filepath']).stem}  {src_start:.0f}~{src_start+dur:.0f}s"
+        tid = threading.current_thread().ident
+        with active_lock:
+            active[tid] = label
+            if pbar:
+                pbar.set_postfix_str(" | ".join(active.values()), refresh=True)
+
+        h = seg["clip_hash"]
         result = transcribe(seg["filepath"], start=src_start,
                             duration=dur, force_lang=force_lang)
         cache.save(h, "transcript", result)
-        with lock:
-            transcripts[h] = result
 
-    with ThreadPoolExecutor(max_workers=TRANSCRIBE_WORKERS) as ex:
+        with active_lock:
+            active.pop(tid, None)
+            transcripts[h] = result
+        if pbar:
+            pbar.update(1)
+            with active_lock:
+                pbar.set_postfix_str(" | ".join(active.values()), refresh=True)
+
+    with ThreadPoolExecutor(max_workers=actual_workers) as ex:
         futures = [ex.submit(_transcribe_one, seg) for seg in need_transcribe]
-        for future in _tqdm(as_completed(futures), total=len(futures), desc="  음성 인식"):
+        for future in as_completed(futures):
             future.result()
+
+    if pbar:
+        pbar.close()
 
     return transcripts
 

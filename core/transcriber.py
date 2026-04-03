@@ -68,6 +68,11 @@ def init_model_pool(n: int = 1):
             print(f"  → TRANSCRIBE_WORKERS={loaded} 으로 실행합니다. (.env에서 조정 가능)")
 
 
+def get_pool_size() -> int:
+    """실제 로드된 모델 인스턴스 수 반환 (init_model_pool 호출 후 사용)."""
+    return _pool.qsize() if _pool is not None else 0
+
+
 def _get_pool() -> queue.Queue:
     global _pool
     if _pool is None:
