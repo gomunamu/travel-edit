@@ -41,11 +41,13 @@ def _tqdm(iterable, **kwargs):
 
 # ─── 1. 스캔 ──────────────────────────────────────────────────────────────
 def scan_videos(input_folder: str) -> List[str]:
-    all_files = sorted(p for p in Path(input_folder).rglob("*") if p.is_file())
+    # rglob 이터레이터를 바로 tqdm에 넘겨 발견 즉시 카운트 표시
+    # (sorted()로 전체를 모으면 그동안 아무것도 안 보임)
     videos = []
-    for p in _tqdm(all_files, desc="  스캔", unit="파일"):
-        if is_video(str(p)):
+    for p in _tqdm(Path(input_folder).rglob("*"), desc="  스캔", unit="파일"):
+        if p.is_file() and is_video(str(p)):
             videos.append(str(p))
+    videos.sort()
     return videos
 
 
