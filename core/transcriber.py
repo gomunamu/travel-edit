@@ -73,6 +73,24 @@ def get_pool_size() -> int:
     return _pool.qsize() if _pool is not None else 0
 
 
+def release_model_pool():
+    """풀의 모든 Whisper 모델을 언로드해 GPU 메모리를 해제한다."""
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            return
+        freed = 0
+        while not _pool.empty():
+            try:
+                _pool.get_nowait()
+                freed += 1
+            except Exception:
+                break
+        _pool = None
+    if freed:
+        print(f"  Whisper 모델 {freed}개 언로드 (GPU 메모리 해제)")
+
+
 def _get_pool() -> queue.Queue:
     global _pool
     if _pool is None:

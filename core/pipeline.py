@@ -19,7 +19,7 @@ from config import (
 from core.cache import Cache, make_clip_hash
 from core.metadata import get_video_info, is_video
 from core.segmenter import plan_segments
-from core.transcriber import transcribe, init_model_pool, get_pool_size
+from core.transcriber import transcribe, init_model_pool, get_pool_size, release_model_pool
 from core.evaluator import evaluate_clip
 from core.geocoder import coords_to_str
 from core.subtitle import make_subtitle_ass, make_subtitle_srt, make_location_ass
@@ -427,6 +427,7 @@ def run(input_folder: str, output_folder: str):
         transcripts = {}
     else:
         transcripts = transcribe_all(segments, cache)
+        release_model_pool()   # GPU 메모리 해제 → 렌더링에서 활용 가능
 
     # 5. AI 평가
     print("\n[5/6] AI 클립 평가...")

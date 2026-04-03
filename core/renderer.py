@@ -130,27 +130,40 @@ def render_day_onepass(
 
     if HAS_TQDM:
         pbar = _tqdm(total=n, desc="  렌더링+병합", unit="클립")
+        pbar.set_postfix_str(f"입력 {n}개 파일 준비 중...", refresh=True)
         current = [0]
 
         def _watch():
+            speed = ""
+            encoding_started = False
             try:
                 with os.fdopen(r_fd, "r") as pipe:
                     for line in pipe:
-                        if not line.startswith("out_time="):
-                            continue
-                        try:
+                        line = line.strip()
+                        if line.startswith("speed="):
+                            val = line.split("=", 1)[1].strip()
+                            if val not in ("N/A", "0.000x", ""):
+                                speed = val
+                        elif line.startswith("out_time="):
                             ts = line.split("=", 1)[1].strip()
-                            h, m, s = ts.split(":")
-                            out_sec = int(h) * 3600 + int(m) * 60 + float(s)
-                        except (ValueError, IndexError):
-                            continue
-                        new_idx = next(
-                            (i for i, b in enumerate(boundaries) if out_sec < b),
-                            n - 1
-                        )
-                        if new_idx > current[0]:
-                            pbar.update(new_idx - current[0])
-                            current[0] = new_idx
+                            if ts in ("N/A", "00:00:00.000000", ""):
+                                continue
+                            try:
+                                h, m, s = ts.split(":")
+                                out_sec = int(h) * 3600 + int(m) * 60 + float(s)
+                            except (ValueError, IndexError):
+                                continue
+                            if not encoding_started:
+                                encoding_started = True
+                            new_idx = next(
+                                (i for i, b in enumerate(boundaries) if out_sec < b),
+                                n - 1
+                            )
+                            if new_idx > current[0]:
+                                pbar.update(new_idx - current[0])
+                                current[0] = new_idx
+                            if speed:
+                                pbar.set_postfix_str(f"speed={speed}", refresh=True)
             except OSError:
                 pass
 
