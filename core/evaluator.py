@@ -10,6 +10,7 @@ from config import (
     GEMINI_API_KEY, GEMINI_MODEL,
     MIN_SEGMENT_DURATION, PURE_LANDSCAPE_THRESHOLD,
 )
+from core.token_tracker import tracker as _tracker
 
 SYSTEM_PROMPT = """당신은 10년 경력의 여행 브이로그 편집자이자 방송국 PD입니다.
 여행 동영상의 각 클립을 분석하고, 최종 편집본에 포함할지 결정합니다.
@@ -120,6 +121,8 @@ def _call_claude(prompt: str, duration: float) -> Tuple[Optional[dict], bool]:
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
+        _tracker.record("Anthropic", CLAUDE_MODEL,
+                        msg.usage.input_tokens, msg.usage.output_tokens)
         return _parse_response(msg.content[0].text.strip(), duration), False
     except Exception as e:
         if _is_rate_limit(e):
@@ -139,6 +142,8 @@ def _call_openai(prompt: str, duration: float) -> Tuple[Optional[dict], bool]:
                 {"role": "user",   "content": prompt},
             ],
         )
+        _tracker.record("OpenAI", OPENAI_MODEL,
+                        msg.usage.prompt_tokens, msg.usage.completion_tokens)
         return _parse_response(msg.choices[0].message.content.strip(), duration), False
     except Exception as e:
         if _is_rate_limit(e):
@@ -156,6 +161,9 @@ def _call_gemini(prompt: str, duration: float) -> Tuple[Optional[dict], bool]:
             system_instruction=SYSTEM_PROMPT,
         )
         response = model.generate_content(prompt)
+        meta = response.usage_metadata
+        _tracker.record("Gemini", GEMINI_MODEL,
+                        meta.prompt_token_count, meta.candidates_token_count)
         return _parse_response(response.text, duration), False
     except Exception as e:
         if _is_rate_limit(e):

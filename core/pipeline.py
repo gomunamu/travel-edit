@@ -16,6 +16,7 @@ from config import (
     SUBTITLE_FONT, SUBTITLE_FONT_SIZE, SUBTITLE_MARGIN_V,
     LOCATION_FONT_SIZE, LOCATION_MARGIN,
 )
+from core.token_tracker import tracker as _token_tracker
 from core.cache import Cache, make_clip_hash
 from core.metadata import get_video_info, is_video
 from core.segmenter import plan_segments
@@ -493,12 +494,14 @@ def run(input_folder: str, output_folder: str):
         if _config.STT_REFINE and _config.ANTHROPIC_API_KEY:
             print(f"\n[4-b] STT 정제 (LLM: {_config.STT_REFINE_MODEL})...")
             transcripts = refine_all(segments, transcripts, cache)
+            _token_tracker.print_current("4-b STT 정제 후")
         elif _config.STT_REFINE and not _config.ANTHROPIC_API_KEY:
             print("\n[4-b] STT 정제 건너뜀 (ANTHROPIC_API_KEY 없음)")
 
     # 5. AI 평가
     print("\n[5/6] AI 클립 평가...")
     evaluations = evaluate_all(segments, transcripts, cache)
+    _token_tracker.print_current("5단계 AI 평가 후")
 
     # 6. 일자별 렌더링
     print("\n[6/6] 일자별 편집 및 렌더링...")
@@ -528,4 +531,5 @@ def run(input_folder: str, output_folder: str):
 
     print(f"\n{'='*60}")
     print(f"  편집 완료! 출력 폴더: {output_folder}")
-    print(f"{'='*60}\n")
+    print(f"{'='*60}")
+    _token_tracker.print_summary()

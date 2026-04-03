@@ -2,6 +2,8 @@
 import json
 from typing import Optional
 
+from core.token_tracker import tracker as _tracker
+
 
 _SYSTEM_PROMPT = """\
 당신은 한국어 STT(음성 인식) 교정 전문가입니다.
@@ -53,6 +55,8 @@ def refine_transcript(transcript: dict, api_key: str, model: str) -> dict:
                 }
             ],
         )
+        _tracker.record("Anthropic", model,
+                        message.usage.input_tokens, message.usage.output_tokens)
         raw = message.content[0].text.strip()
 
         # JSON 배열 파싱
