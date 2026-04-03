@@ -52,9 +52,14 @@ Style: Sub,{font},{scaled_font},&H00FFFFFF,&H000000FF,&H00000000,&H99000000,-1,0
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events = []
-    for seg in speech_segs:
+    for i, seg in enumerate(speech_segs):
         start = max(0.0, seg["start"] - trim_offset)
-        end = max(start + 1.5, seg["end"] - trim_offset)
+        end   = max(seg["end"] - trim_offset, start + 0.3)
+        # 다음 세그먼트 시작 직전에 종료 → 자막 겹침 방지
+        if i + 1 < len(speech_segs):
+            next_start = max(0.0, speech_segs[i + 1]["start"] - trim_offset)
+            end = min(end, next_start - 0.05)
+        end = max(start + 0.3, end)  # 최소 0.3초 표시
         text = seg["text"].replace("\n", "\\N").strip()
         if not text:
             continue

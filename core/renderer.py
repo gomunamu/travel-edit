@@ -16,18 +16,7 @@ except ImportError:
 
 
 def get_day_resolution(clips: List[dict]) -> Tuple[int, int]:
-    """하루 클립들의 대표 출력 해상도 결정 (가장 많은 해상도 기준)"""
-    from collections import Counter
-    landscape_res = []
-    for c in clips:
-        w = c.get("display_width", c.get("raw_width", 1920))
-        h = c.get("display_height", c.get("raw_height", 1080))
-        if w >= h:
-            landscape_res.append((w, h))
-
-    if landscape_res:
-        counter = Counter(landscape_res)
-        return counter.most_common(1)[0][0]
+    """config.OUTPUT_RESOLUTION 반환 (설정값 우선)"""
     return OUTPUT_RESOLUTION
 
 
