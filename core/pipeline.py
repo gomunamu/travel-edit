@@ -3,25 +3,25 @@ import os
 from pathlib import Path
 from datetime import datetime, timezone
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional
 import threading
 
 import config as _config
 from config import (
-    METADATA_WORKERS, SEGMENT_WORKERS, TRANSCRIBE_WORKERS, RENDER_WORKERS,
+    METADATA_WORKERS, TRANSCRIBE_WORKERS,
     CLAUDE_MAX_CONCURRENT, LOCATION_DISPLAY_DURATION, LOCATION_FADE_DURATION,
     SUBTITLE_FONT, SUBTITLE_FONT_SIZE, SUBTITLE_MARGIN_V,
     LOCATION_FONT_SIZE, LOCATION_MARGIN,
 )
 from core.cache import Cache, make_clip_hash
 from core.metadata import get_video_info, is_video
-from core.segmenter import plan_segments, extract_segment, _ffmpeg_worker
+from core.segmenter import plan_segments
 from core.transcriber import transcribe, init_model_pool
 from core.evaluator import evaluate_clip
 from core.geocoder import coords_to_str
 from core.subtitle import make_subtitle_ass, make_subtitle_srt, make_location_ass
-from core.renderer import get_day_resolution, render_clip, concat_day, is_valid_video
+from core.renderer import get_day_resolution, render_day_onepass, is_valid_video
 
 try:
     from tqdm import tqdm
@@ -88,85 +88,32 @@ def extract_all_metadata(video_files: List[str], cache: Cache) -> List[dict]:
     return results
 
 
-# ─── 3. 세그먼트 분할 (ProcessPoolExecutor + 파일별 그룹화) ─────────────────
-def segment_all(clips: List[dict], segments_dir: str, cache: Cache) -> List[dict]:
+# ─── 3. 세그먼트 계획 (파일 추출 없음) ──────────────────────────────────────
+def segment_all(clips: List[dict], cache: Cache) -> List[dict]:
     """
-    분할 전략:
-    - ThreadPoolExecutor 대신 ProcessPoolExecutor 사용
-      → subprocess.run 이 fork()를 직렬화하는 Python 스레딩 한계를 우회
-    - 같은 소스 파일의 세그먼트를 하나의 워커에 묶어 시간순 처리
-      → HDD seek 최소화 (앞에서 뒤로 순방향 읽기)
-    - 서로 다른 소스 파일은 workers 개수만큼 동시 처리
+    클립을 논리 세그먼트로 분할한다.
+    파일 추출 없이 원본 파일 경로 + _src_start(절대 위치) 만 기록.
+    Whisper 음성 인식 및 최종 렌더링 모두 원본 파일에서 직접 읽는다.
     """
-    cpu = os.cpu_count() or 4
-    workers = SEGMENT_WORKERS or max(4, cpu)
-
-    out_dir = Path(segments_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # 1단계: 계획 수립 (I/O 없음)
-    clip_plans: List[tuple] = []
-    for idx, clip in enumerate(clips):
+    all_segs: List[dict] = []
+    n_split = 0
+    for clip in clips:
         if clip["duration"] <= 0:
             continue
-        plan = plan_segments(clip, out_dir)
-        clip_plans.append((idx, plan))
-
-    # 2단계: 추출이 필요한 세그먼트를 소스 파일별로 그룹화
-    from collections import defaultdict
-    by_src: dict = defaultdict(list)
-    for _, plan in clip_plans:
-        for seg in plan:
-            if "_src" not in seg:
-                continue
-            dst = seg["filepath"]
-            if Path(dst).exists() and Path(dst).stat().st_size >= 10_000:
-                continue  # 이미 존재
-            by_src[seg["_src"]].append(
-                (seg["_src"], seg["_seg_start"], seg["duration"], dst)
-            )
-
-    # 각 파일 내 세그먼트를 시작 시간 순 정렬 (순방향 seek)
-    file_groups = [
-        sorted(segs, key=lambda x: x[1])   # sort by start time
-        for segs in by_src.values()
-        if segs
-    ]
-
-    failed_paths: set = set()
-
-    n_short = sum(1 for _, plan in clip_plans if not any("_src" in s for s in plan))
-    n_long  = len(by_src)
-    n_segs  = sum(len(g) for g in file_groups)
-    print(f"  {n_short}개 클립: 분할 불필요 (30초 이하)")
-
-    if file_groups:
-        print(f"  {n_long}개 클립: {n_segs}개 세그먼트 → ProcessPool {workers}개 병렬 분할")
-        with ProcessPoolExecutor(max_workers=workers) as ex:
-            futures = {ex.submit(_ffmpeg_worker, tuple(g)): g for g in file_groups}
-            for future in _tqdm(as_completed(futures), total=len(futures), desc="  클립 분할"):
-                try:
-                    failed = future.result()
-                    failed_paths.update(failed)
-                    if failed:
-                        for dst in failed:
-                            print(f"\n  [경고] 분할 실패: {Path(dst).name}")
-                except Exception as e:
-                    print(f"\n  [경고] 워커 오류: {e}")
-
-    # 3단계: 원본 순서 복원, 임시 키 제거, 캐시 저장
-    clip_plans.sort(key=lambda x: x[0])
-    all_segs: List[dict] = []
-    for _, plan in clip_plans:
-        for seg in plan:
-            seg.pop("_src", None)
-            seg.pop("_seg_start", None)
-            if seg["filepath"] in failed_paths:
-                continue
+        segs = plan_segments(clip)
+        if len(segs) > 1:
+            n_split += 1
+        for seg in segs:
             if seg.get("parent_hash") and not cache.load(seg["clip_hash"], "meta"):
                 cache.save(seg["clip_hash"], "meta", seg)
             all_segs.append(seg)
 
+    n_short = len(all_segs) - sum(len(plan_segments(c)) - 1
+                                  for c in clips if c["duration"] > 0
+                                  and len(plan_segments(c)) > 1)
+    if n_split:
+        print(f"  {n_split}개 클립 → 복수 세그먼트로 논리 분할")
+    print(f"  → 총 {len(all_segs)}개 세그먼트 (파일 추출 없음)")
     return all_segs
 
 
@@ -198,7 +145,11 @@ def transcribe_all(segments: List[dict], cache: Cache) -> Dict[str, dict]:
 
     def _transcribe_one(seg):
         h = seg["clip_hash"]
-        result = transcribe(seg["filepath"], force_lang=force_lang)
+        # 원본 파일의 해당 구간만 오디오 추출해 Whisper에 전달
+        src_start = seg.get("_src_start", 0.0)
+        dur = seg.get("duration")
+        result = transcribe(seg["filepath"], start=src_start,
+                            duration=dur, force_lang=force_lang)
         cache.save(h, "transcript", result)
         with lock:
             transcripts[h] = result
@@ -259,10 +210,13 @@ def render_day(
     transcripts: Dict[str, dict],
     evaluations: Dict[str, dict],
     cache: Cache,
-    rendered_dir: Path,
     output_path: str,
 ) -> bool:
-    # 선택된 클립 필터링
+    """
+    하루치 세그먼트를 평가 결과에 따라 선별하고,
+    filter_complex 로 한 번에 트림·스케일·자막·병합 (중간 파일 없음).
+    """
+    out_res = get_day_resolution(day_segments)
     selected = []
     prev_location = None
 
@@ -278,10 +232,10 @@ def render_day(
         clip = dict(seg)
         if decision == "trim":
             clip["trim_start"] = float(ev.get("keep_start", 0))
-            clip["trim_end"] = float(ev.get("keep_end", seg["duration"]))
+            clip["trim_end"]   = float(ev.get("keep_end", seg["duration"]))
         else:
             clip["trim_start"] = 0.0
-            clip["trim_end"] = seg["duration"]
+            clip["trim_end"]   = seg["duration"]
 
         # 장소 결정
         location_name = None
@@ -305,41 +259,41 @@ def render_day(
         print(f"  → {day_key}: 선택된 클립 없음, 건너뜀")
         return False
 
-    out_res = get_day_resolution(selected)
     print(f"  출력 해상도: {out_res[0]}x{out_res[1]}, {len(selected)}개 클립")
 
-    # 병렬 렌더링
-    render_args = []
-    for idx, clip in enumerate(selected):
+    # ASS 파일 생성 (자막·장소) — 캐시 활용
+    clips_info = []
+    for clip in selected:
         h = clip["clip_hash"]
-        out_clip = rendered_dir / f"clip_{idx:04d}_{h}.mp4"
+        trim_start = clip["trim_start"]
+        trim_end   = clip["trim_end"]
+        clip_dur   = trim_end - trim_start
 
-        # 자막 ASS 생성 (overlay 모드에서만 번인)
+        # 자막 ASS (overlay 모드)
         sub_path = None
-        transcript = transcripts.get(h, {})
-        segs = transcript.get("segments", [])
-        if segs and transcript.get("has_speech") and _config.SUBTITLE_MODE == "overlay":
-            sub_path = cache.ass_path(h, "subtitle")
-            if not cache.ass_exists(h, "subtitle"):
-                trim_offset = clip["trim_start"]
-                adjusted = [
-                    dict(s, start=s["start"] - trim_offset, end=s["end"] - trim_offset)
-                    for s in segs
-                    if s["end"] > trim_offset
-                ]
-                make_subtitle_ass(
-                    adjusted, sub_path, out_res,
-                    font=SUBTITLE_FONT, font_size=SUBTITLE_FONT_SIZE,
-                    margin_v=SUBTITLE_MARGIN_V
-                )
+        if _config.SUBTITLE_MODE == "overlay":
+            transcript = transcripts.get(h, {})
+            segs = transcript.get("segments", [])
+            if segs and transcript.get("has_speech"):
+                sub_path = cache.ass_path(h, "subtitle")
+                if not cache.ass_exists(h, "subtitle"):
+                    adjusted = [
+                        dict(s, start=s["start"] - trim_start,
+                                end=s["end"]   - trim_start)
+                        for s in segs if s["end"] > trim_start
+                    ]
+                    make_subtitle_ass(
+                        adjusted, sub_path, out_res,
+                        font=SUBTITLE_FONT, font_size=SUBTITLE_FONT_SIZE,
+                        margin_v=SUBTITLE_MARGIN_V,
+                    )
 
-        # 장소 ASS 생성
+        # 장소 ASS
         loc_path = None
         loc_name = clip.get("show_location")
         if loc_name:
             loc_path = cache.ass_path(h, "location")
             if not cache.ass_exists(h, "location"):
-                clip_dur = clip["trim_end"] - clip["trim_start"]
                 make_location_ass(
                     loc_name, clip_dur, loc_path, out_res,
                     display_duration=LOCATION_DISPLAY_DURATION,
@@ -348,83 +302,26 @@ def render_day(
                     margin=LOCATION_MARGIN,
                 )
 
-        render_args.append((clip, str(out_clip), out_res, sub_path, loc_path))
+        clips_info.append({**clip, "sub_path": sub_path, "loc_path": loc_path})
 
-    # 이미 렌더링된 클립 건너뜀 (corrupt 파일은 재렌더링)
-    def _needs_render(path: str, loc_path: str = None) -> bool:
-        p = Path(path)
-        if not p.exists() or p.stat().st_size < 10_000:
-            return True
-        if not is_valid_video(path):
-            p.unlink(missing_ok=True)
-            return True
-        # 위치 ASS가 렌더링 클립보다 새로우면 위치 오버레이 반영 위해 재렌더
-        if loc_path:
-            lp = Path(loc_path)
-            if lp.exists() and lp.stat().st_mtime > p.stat().st_mtime:
-                return True
-        return False
-
-    to_render = [(args, i) for i, args in enumerate(render_args)
-                 if _needs_render(args[1], args[4])]
-
-    failed_indices = set()
-
-    if to_render:
-        n_workers = RENDER_WORKERS or max(1, (os.cpu_count() or 2) // 2)
-        print(f"  렌더링: {len(to_render)}개 (워커 {n_workers}개)")
-
-        lock2 = threading.Lock()
-
-        def _render(item):
-            args, idx = item
-            clip, out_clip, out_res_, sub_path_, loc_path_ = args
-            ok = render_clip(clip, out_clip, out_res_, sub_path_, loc_path_)
-            if not ok:
-                with lock2:
-                    failed_indices.add(idx)
-            return ok
-
-        with ThreadPoolExecutor(max_workers=n_workers) as ex:
-            list(_tqdm(ex.map(_render, to_render), total=len(to_render), desc="  렌더링"))
-
-        if failed_indices:
-            print(f"  [경고] {len(failed_indices)}개 클립 렌더링 실패, 병합에서 제외")
-
-    # 최종 병합 (존재하고 유효한 클립만 포함, 실패/손상 클립 제외)
-    included = [
-        args for i, args in enumerate(render_args)
-        if i not in failed_indices
-        and Path(args[1]).exists() and Path(args[1]).stat().st_size >= 10_000
-        and is_valid_video(args[1])
-    ]
-    clip_paths = [args[1] for args in included]
-    if not clip_paths:
-        print(f"  → {day_key}: 렌더링된 클립 없음")
-        return False
-
-    clip_durations = [
-        args[0]["trim_end"] - args[0]["trim_start"] for args in included
-    ]
-    print(f"  병합 중: {len(clip_paths)}개 → {Path(output_path).name}")
-    ok = concat_day(clip_paths, output_path, clip_durations=clip_durations)
+    print(f"  렌더링+병합 → {Path(output_path).name}")
+    ok = render_day_onepass(clips_info, output_path, out_res)
 
     # SRT 모드: 병합 성공 후 타임라인 맞춰 단일 SRT 파일 생성
     if ok and _config.SUBTITLE_MODE == "srt":
         cumulative = 0.0
         srt_segs = []
-        for args in included:
-            clip, _, _, _, _ = args
+        for clip in clips_info:
             h = clip["clip_hash"]
             transcript = transcripts.get(h, {})
             segs = transcript.get("segments", [])
-            trim_offset = clip["trim_start"]
-            clip_dur = clip["trim_end"] - clip["trim_start"]
+            trim_start = clip["trim_start"]
+            clip_dur   = clip["trim_end"] - trim_start
             if segs and transcript.get("has_speech"):
                 for seg in segs:
                     if seg.get("no_speech_prob", 1.0) < 0.5 and seg.get("text", "").strip():
-                        start = max(0.0, seg["start"] - trim_offset) + cumulative
-                        end   = min(max(start + 0.5, seg["end"] - trim_offset) + cumulative,
+                        start = max(0.0, seg["start"] - trim_start) + cumulative
+                        end   = min(max(start + 0.5, seg["end"] - trim_start + cumulative),
                                     cumulative + clip_dur)
                         srt_segs.append({"start": start, "end": end,
                                          "text": seg["text"].strip()})
@@ -433,11 +330,6 @@ def render_day(
             srt_path = output_path.replace(".mp4", ".srt")
             make_subtitle_srt(srt_segs, srt_path)
             print(f"  ✓ SRT 자막: {Path(srt_path).name} ({len(srt_segs)}개)")
-
-    # 병합 완료 후 개별 렌더링 클립 삭제
-    if ok:
-        for p in clip_paths:
-            Path(p).unlink(missing_ok=True)
 
     return ok
 
@@ -448,7 +340,6 @@ def run(input_folder: str, output_folder: str):
     out_dir.mkdir(parents=True, exist_ok=True)
     cache_dir = out_dir / ".cache"
     cache = Cache(str(cache_dir))
-    segments_dir = cache_dir / "segments"
 
     print(f"\n{'='*60}")
     print(f"  여행 영상 자동 편집기")
@@ -469,10 +360,9 @@ def run(input_folder: str, output_folder: str):
     clips = extract_all_metadata(videos, cache)
     print(f"  → {len(clips)}개 처리됨")
 
-    # 3. 세그먼트 분할
-    print("\n[3/6] 긴 클립 분할...")
-    segments = segment_all(clips, str(segments_dir), cache)
-    print(f"  → {len(segments)}개 세그먼트 (원본 {len(clips)}개)")
+    # 3. 세그먼트 계획
+    print("\n[3/6] 세그먼트 계획 수립...")
+    segments = segment_all(clips, cache)
 
     # 4. 음성 인식
     print("\n[4/6] 음성 인식 (Whisper)...")
@@ -498,8 +388,6 @@ def run(input_folder: str, output_folder: str):
         day_segs = day_groups[day_key]
         print(f"\n  ── {day_key} ({len(day_segs)}개 클립) ──")
 
-        rendered_dir = out_dir / "rendered" / day_key
-        rendered_dir.mkdir(parents=True, exist_ok=True)
         output_path = str(out_dir / f"travel_{day_key}.mp4")
 
         if Path(output_path).exists():
@@ -508,21 +396,11 @@ def run(input_folder: str, output_folder: str):
 
         ok = render_day(
             day_key, day_segs, transcripts, evaluations,
-            cache, rendered_dir, output_path
+            cache, output_path
         )
         if ok:
             size_mb = Path(output_path).stat().st_size / 1_048_576
             print(f"  ✓ 완료: {output_path} ({size_mb:.1f} MB)")
-
-            # 렌더링 완료 후 해당 날짜 세그먼트 삭제 (원본 클립은 유지)
-            freed = 0
-            for seg in day_segs:
-                seg_path = Path(seg["filepath"])
-                if seg_path.exists() and seg.get("parent_hash"):  # 분할된 세그먼트만
-                    freed += seg_path.stat().st_size
-                    seg_path.unlink()
-            if freed:
-                print(f"  → 세그먼트 정리: {freed / 1_048_576:.1f} MB 해제")
 
     print(f"\n{'='*60}")
     print(f"  편집 완료! 출력 폴더: {output_folder}")

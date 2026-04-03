@@ -1,7 +1,6 @@
 """ffmpeg 기반 클립 렌더링 및 병합"""
 import subprocess
 import os
-import tempfile
 import threading
 from pathlib import Path
 from typing import List, Tuple, Optional
@@ -39,94 +38,147 @@ def build_scale_filter(is_portrait: bool, out_w: int, out_h: int) -> str:
         )
 
 
-def render_clip(
-    clip: dict,
+def render_day_onepass(
+    clips_info: List[dict],
     output_path: str,
     out_res: Tuple[int, int],
-    subtitle_path: Optional[str] = None,
-    location_path: Optional[str] = None,
 ) -> bool:
     """
-    단일 클립을 렌더링.
-    - trim_start/trim_end 적용
-    - 세로/가로 처리
-    - 자막 번인
-    - 장소 오버레이 번인
+    선택된 클립들을 filter_complex 로 한 번에 트림·스케일·자막 번인·병합.
+    중간 파일 없음. 원본 파일에서 직접 읽어 최종 출력물 하나로 인코딩.
+
+    clips_info 각 항목에 필요한 키:
+        filepath, _src_start, trim_start, trim_end,
+        is_portrait, has_audio, sub_path (or None), loc_path (or None)
     """
-    filepath = clip["filepath"]
-    trim_start = clip.get("trim_start", 0.0)
-    trim_end = clip.get("trim_end", clip.get("duration", 0.0))
-    seg_duration = trim_end - trim_start
-    is_portrait = clip.get("is_portrait", False)
     out_w, out_h = out_res
+    n = len(clips_info)
 
-    if seg_duration <= 0.1:
-        return False
+    cmd_inputs: List[str] = []
+    filter_parts: List[str] = []
+    vstreams: List[str] = []
+    astreams: List[str] = []
 
-    # 비디오 필터 체인 구성
-    filters = []
-    filters.append(build_scale_filter(is_portrait, out_w, out_h))
+    # 프로그레스 바용 누적 경계
+    total_dur = 0.0
+    boundaries: List[float] = []
 
-    # 장소 오버레이 (먼저)
-    if location_path and Path(location_path).exists():
-        esc = _esc_path(location_path)
-        filters.append(f"ass='{esc}'")
+    for i, clip in enumerate(clips_info):
+        src = clip["filepath"]
+        src_start = clip.get("_src_start", 0.0)
+        trim_start = clip.get("trim_start", 0.0)
+        trim_end = clip.get("trim_end", clip["duration"])
+        abs_start = src_start + trim_start
+        abs_dur = max(0.1, trim_end - trim_start)
+        total_dur += abs_dur
+        boundaries.append(total_dur)
 
-    # 자막 (나중)
-    if subtitle_path and Path(subtitle_path).exists():
-        esc = _esc_path(subtitle_path)
-        filters.append(f"ass='{esc}'")
+        # 입력: fast seek + 정확한 길이 제한
+        cmd_inputs += ["-ss", f"{abs_start:.3f}", "-t", f"{abs_dur:.3f}", "-i", src]
 
-    vf = ",".join(filters)
+        # 비디오 필터 체인
+        vf = f"[{i}:v]setpts=PTS-STARTPTS,{build_scale_filter(clip.get('is_portrait', False), out_w, out_h)}"
+        loc_path = clip.get("loc_path")
+        sub_path = clip.get("sub_path")
+        if loc_path and Path(loc_path).exists():
+            vf += f",ass='{_esc_path(loc_path)}'"
+        if sub_path and Path(sub_path).exists():
+            vf += f",ass='{_esc_path(sub_path)}'"
+        vf += f"[v{i}]"
+        filter_parts.append(vf)
+        vstreams.append(f"[v{i}]")
 
-    # 타겟 비트레이트 (원본 비트레이트와 최대한 유사하게)
-    v_bitrate = clip.get("video_bitrate_kbps", 0)
-    if v_bitrate < 1000:
-        v_bitrate = 8000  # 기본값
-    a_bitrate = clip.get("audio_bitrate_kbps", 192)
+        # 오디오 필터 체인
+        if clip.get("has_audio", True):
+            filter_parts.append(f"[{i}:a]asetpts=PTS-STARTPTS[a{i}]")
+        else:
+            # 오디오 트랙 없는 클립 → 무음 대체
+            filter_parts.append(
+                f"anullsrc=r=48000:cl=stereo,"
+                f"atrim=duration={abs_dur:.3f}[a{i}]"
+            )
+        astreams.append(f"[a{i}]")
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-ss", f"{trim_start:.3f}",
-        "-i", filepath,
-        "-t", f"{seg_duration:.3f}",
-        "-vf", vf,
-        "-c:v", "libx264",
-        "-crf", str(CRF),
-        "-preset", FFMPEG_PRESET,
-        "-b:v", f"{v_bitrate}k",
-        "-maxrate", f"{int(v_bitrate * 1.5)}k",
-        "-bufsize", f"{v_bitrate * 2}k",
-        "-r", "30",
-        "-pix_fmt", "yuv420p",
-    ]
+    # concat 필터
+    concat_in = "".join(vstreams) + "".join(astreams)
+    filter_parts.append(f"{concat_in}concat=n={n}:v=1:a=1[vout][aout]")
 
-    if clip.get("has_audio", True):
-        cmd += [
+    # 프로그레스 파이프 설정
+    r_fd, w_fd = os.pipe()
+    cmd = (
+        ["ffmpeg", "-y"]
+        + cmd_inputs
+        + [
+            "-filter_complex", ";".join(filter_parts),
+            "-map", "[vout]",
+            "-map", "[aout]",
+            "-c:v", "libx264",
+            "-crf", str(CRF),
+            "-preset", FFMPEG_PRESET,
+            "-r", "30",
+            "-pix_fmt", "yuv420p",
             "-c:a", "aac",
-            "-b:a", f"{a_bitrate}k",
+            "-b:a", "192k",
             "-ar", "48000",
             "-ac", "2",
+            "-movflags", "+faststart",
+            "-progress", f"pipe:{w_fd}",
+            "-nostats",
+            output_path,
         ]
+    )
+
+    if HAS_TQDM:
+        pbar = _tqdm(total=n, desc="  렌더링+병합", unit="클립")
+        current = [0]
+
+        def _watch():
+            try:
+                with os.fdopen(r_fd, "r") as pipe:
+                    for line in pipe:
+                        if not line.startswith("out_time="):
+                            continue
+                        try:
+                            ts = line.split("=", 1)[1].strip()
+                            h, m, s = ts.split(":")
+                            out_sec = int(h) * 3600 + int(m) * 60 + float(s)
+                        except (ValueError, IndexError):
+                            continue
+                        new_idx = next(
+                            (i for i, b in enumerate(boundaries) if out_sec < b),
+                            n - 1
+                        )
+                        if new_idx > current[0]:
+                            pbar.update(new_idx - current[0])
+                            current[0] = new_idx
+            except OSError:
+                pass
+
+        watcher = threading.Thread(target=_watch, daemon=True)
+        watcher.start()
     else:
-        cmd += [
-            "-an",  # 오디오 없는 클립
-        ]
+        watcher = None
+        pbar = None
 
-    cmd += [
-        "-movflags", "+faststart",
-        output_path
-    ]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        pass_fds=(w_fd,),
+    )
+    os.close(w_fd)
+    proc.wait()
 
-    timeout = max(600, int(seg_duration * 20))
-    result = subprocess.run(cmd, capture_output=True, timeout=timeout)
-    if result.returncode != 0:
-        try:
-            os.unlink(output_path)
-        except OSError:
-            pass
-        err = result.stderr[-600:].decode(errors="replace")
-        print(f"  [오류] 렌더링 실패: {Path(filepath).name}\n    {err}")
+    if watcher:
+        watcher.join(timeout=5)
+    if pbar:
+        if current[0] < n:
+            pbar.update(n - current[0])
+        pbar.close()
+
+    if proc.returncode != 0:
+        err = (proc.stderr.read() if proc.stderr else b"")[-800:].decode(errors="replace")
+        print(f"  [오류] 렌더링 실패:\n{err}")
         return False
     return True
 
@@ -139,120 +191,6 @@ def is_valid_video(path: str) -> bool:
         capture_output=True, timeout=30
     )
     return result.returncode == 0 and result.stdout.strip() != b""
-
-
-def concat_day(segment_paths: List[str], output_path: str,
-               clip_durations: List[float] = None) -> bool:
-    """하루 분량 세그먼트를 하나로 합치기 (stream copy).
-
-    clip_durations 를 넘기면 ffmpeg progress 파이프를 파싱해 클립 단위 프로그레스 바 표시.
-    """
-    n = len(segment_paths)
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
-        concat_file = f.name
-        for p in segment_paths:
-            # concat demuxer requires escaped absolute paths
-            abs_p = os.path.abspath(p)
-            escaped = abs_p.replace("\\", "/").replace("'", "\\'")
-            f.write(f"file '{escaped}'\n")
-
-    # 누적 타임라인 경계 계산 (어느 시각이 몇 번째 클립인지 매핑)
-    boundaries: List[float] = []
-    if clip_durations:
-        t = 0.0
-        for d in clip_durations:
-            t += d
-            boundaries.append(t)
-
-    use_progress = bool(boundaries) and HAS_TQDM
-
-    try:
-        if use_progress:
-            r_fd, w_fd = os.pipe()
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "concat", "-safe", "0",
-                "-i", concat_file,
-                "-c", "copy",
-                "-movflags", "+faststart",
-                "-progress", f"pipe:{w_fd}",
-                "-nostats",
-                output_path,
-            ]
-        else:
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "concat", "-safe", "0",
-                "-i", concat_file,
-                "-c", "copy",
-                "-movflags", "+faststart",
-                output_path,
-            ]
-
-        if use_progress:
-            pbar = _tqdm(total=n, desc="  병합", unit="클립")
-            current = [0]  # mutable cell for thread
-
-            def _watch_progress():
-                try:
-                    with os.fdopen(r_fd, "r") as pipe:
-                        for line in pipe:
-                            if not line.startswith("out_time="):
-                                continue
-                            # out_time 형식: HH:MM:SS.XXXXXX
-                            try:
-                                ts = line.split("=", 1)[1].strip()
-                                h, m, s = ts.split(":")
-                                out_sec = int(h) * 3600 + int(m) * 60 + float(s)
-                            except (ValueError, IndexError):
-                                continue
-                            # 현재 클립 인덱스 계산
-                            new_idx = next(
-                                (i for i, b in enumerate(boundaries) if out_sec < b),
-                                n - 1
-                            )
-                            if new_idx > current[0]:
-                                pbar.update(new_idx - current[0])
-                                current[0] = new_idx
-                except OSError:
-                    pass
-
-            watcher = threading.Thread(target=_watch_progress, daemon=True)
-            watcher.start()
-
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                pass_fds=(w_fd,),
-            )
-            os.close(w_fd)   # 부모 프로세스에서 쓰기 끝 닫기
-            proc.wait()
-            watcher.join(timeout=5)
-
-            # 마지막 클립까지 채워줌
-            if current[0] < n:
-                pbar.update(n - current[0])
-            pbar.close()
-
-            if proc.returncode != 0:
-                err = (proc.stderr.read() if proc.stderr else b"")[-400:].decode(errors="replace")
-                print(f"  [오류] 병합 실패: {err}")
-                return False
-            return True
-        else:
-            result = subprocess.run(cmd, capture_output=True)
-            if result.returncode != 0:
-                err = result.stderr[-400:].decode(errors="replace")
-                print(f"  [오류] 병합 실패: {err}")
-                return False
-            return True
-    finally:
-        try:
-            os.unlink(concat_file)
-        except OSError:
-            pass
 
 
 def _esc_path(path: str) -> str:

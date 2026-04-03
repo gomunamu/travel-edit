@@ -75,26 +75,27 @@ def _get_pool() -> queue.Queue:
     return _pool
 
 
-def _extract_audio(video_path: str, wav_path: str):
-    """비디오에서 오디오 추출 (16kHz mono WAV)"""
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", video_path,
-        "-vn",
-        "-acodec", "pcm_s16le",
-        "-ar", "16000",
-        "-ac", "1",
-        wav_path
-    ]
-    subprocess.run(cmd, capture_output=True, timeout=60)
+def _extract_audio(video_path: str, wav_path: str,
+                   start: float = 0.0, duration: float = None):
+    """비디오에서 오디오 추출 (16kHz mono WAV). start/duration 으로 구간 지정 가능."""
+    cmd = ["ffmpeg", "-y"]
+    if start > 0.001:
+        cmd += ["-ss", f"{start:.3f}"]
+    cmd += ["-i", video_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1"]
+    if duration is not None:
+        cmd += ["-t", f"{duration:.3f}"]
+    cmd += [wav_path]
+    subprocess.run(cmd, capture_output=True, timeout=120)
 
 
-def transcribe(video_path: str, force_lang: str = None) -> dict:
+def transcribe(video_path: str, start: float = 0.0, duration: float = None,
+               force_lang: str = None) -> dict:
     """음성 인식 실행, TranscriptDict 반환. 풀에서 모델을 빌려 쓰고 반납."""
     pool = _get_pool()
     model = pool.get()
     try:
-        return _transcribe_with(model, video_path, force_lang)
+        return _transcribe_with(model, video_path, start=start,
+                                duration=duration, force_lang=force_lang)
     finally:
         pool.put(model)
 
@@ -103,7 +104,8 @@ def transcribe(video_path: str, force_lang: str = None) -> dict:
 _LANG_MAP = {"ko": "ko", "en": "en", "ja": "ja", "zh": "zh"}
 
 
-def _transcribe_with(model, video_path: str, force_lang: str = None) -> dict:
+def _transcribe_with(model, video_path: str, start: float = 0.0,
+                     duration: float = None, force_lang: str = None) -> dict:
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         wav_path = tmp.name
@@ -111,7 +113,7 @@ def _transcribe_with(model, video_path: str, force_lang: str = None) -> dict:
     whisper_lang = _LANG_MAP.get(force_lang)  # None이면 자동 감지
 
     try:
-        _extract_audio(video_path, wav_path)
+        _extract_audio(video_path, wav_path, start=start, duration=duration)
 
         if not Path(wav_path).exists() or Path(wav_path).stat().st_size < 1000:
             return _empty_transcript()
