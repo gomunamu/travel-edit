@@ -150,8 +150,9 @@ def _render_batch(
             )
         astreams.append(f"[a{i}]")
 
-    concat_in = "".join(vstreams) + "".join(astreams)
-    filter_parts.append(f"{concat_in}concat=n={n}:v=1:a=1[vout][aout]")
+    # concat 필터 입력은 세그먼트별 교차 순서: [v0][a0][v1][a1]...[vN][aN]
+    interleaved = "".join(f"{v}{a}" for v, a in zip(vstreams, astreams))
+    filter_parts.append(f"{interleaved}concat=n={n}:v=1:a=1[vout][aout]")
 
     r_fd, w_fd = os.pipe()
     cmd = (
