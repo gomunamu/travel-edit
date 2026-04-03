@@ -1,4 +1,6 @@
 """전체 편집 파이프라인 조율"""
+import hashlib
+import json
 import os
 from pathlib import Path
 from datetime import datetime, timezone
@@ -88,13 +90,33 @@ def extract_all_metadata(video_files: List[str], cache: Cache) -> List[dict]:
     return results
 
 
-# ─── 3. 세그먼트 계획 (파일 추출 없음) ──────────────────────────────────────
+# ─── 3. 세그먼트 계획 (파일 추출 없음, JSON 캐시) ────────────────────────────
 def segment_all(clips: List[dict], cache: Cache) -> List[dict]:
     """
     클립을 논리 세그먼트로 분할한다.
-    파일 추출 없이 원본 파일 경로 + _src_start(절대 위치) 만 기록.
-    Whisper 음성 인식 및 최종 렌더링 모두 원본 파일에서 직접 읽는다.
+    계획 결과는 {cache}/.segment_plan.json 에 저장되어
+    재시작 시 바로 불러온다. 입력 클립이 바뀌면 자동으로 재계획.
     """
+    plan_path = cache.root / ".segment_plan.json"
+
+    # 클립 목록 지문 — clip_hash 는 파일 경로+mtime+size 기반이므로
+    # 파일이 추가·삭제·변경되면 지문이 달라진다
+    fingerprint = hashlib.sha256(
+        "|".join(c["clip_hash"] for c in clips).encode()
+    ).hexdigest()
+
+    # 기존 계획 로드
+    if plan_path.exists():
+        try:
+            saved = json.loads(plan_path.read_text(encoding="utf-8"))
+            if saved.get("fingerprint") == fingerprint:
+                segs = saved["segments"]
+                print(f"  → {len(segs)}개 세그먼트 (계획 파일 로드)")
+                return segs
+        except (json.JSONDecodeError, KeyError):
+            pass  # 손상됐으면 재계획
+
+    # 새로 계획 수립
     all_segs: List[dict] = []
     n_split = 0
     for clip in clips:
@@ -108,12 +130,16 @@ def segment_all(clips: List[dict], cache: Cache) -> List[dict]:
                 cache.save(seg["clip_hash"], "meta", seg)
             all_segs.append(seg)
 
-    n_short = len(all_segs) - sum(len(plan_segments(c)) - 1
-                                  for c in clips if c["duration"] > 0
-                                  and len(plan_segments(c)) > 1)
     if n_split:
         print(f"  {n_split}개 클립 → 복수 세그먼트로 논리 분할")
-    print(f"  → 총 {len(all_segs)}개 세그먼트 (파일 추출 없음)")
+    print(f"  → 총 {len(all_segs)}개 세그먼트")
+
+    # 계획 저장
+    plan_path.write_text(
+        json.dumps({"fingerprint": fingerprint, "segments": all_segs},
+                   ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     return all_segs
 
 
