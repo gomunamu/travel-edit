@@ -41,9 +41,10 @@ def _tqdm(iterable, **kwargs):
 
 # ─── 1. 스캔 ──────────────────────────────────────────────────────────────
 def scan_videos(input_folder: str) -> List[str]:
+    all_files = sorted(p for p in Path(input_folder).rglob("*") if p.is_file())
     videos = []
-    for p in sorted(Path(input_folder).rglob("*")):
-        if p.is_file() and is_video(str(p)):
+    for p in _tqdm(all_files, desc="  스캔", unit="파일"):
+        if is_video(str(p)):
             videos.append(str(p))
     return videos
 
