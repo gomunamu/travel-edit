@@ -118,7 +118,9 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
             return result
         if rate_limited:
             _rotate()
-            print(f"  [rate limit] {name} → 다음 API로 전환")
+            apis2 = _get_apis()
+            next_name = apis2[0][0] if apis2 else "규칙 기반"
+            print(f"  [rate limit] {name} → {next_name} 으로 전환")
 
     return _rule_based_eval(duration, has_speech, speech_sec)
 
