@@ -90,6 +90,18 @@ def init_model_pool(n: int = 0):
         print(f"  → TRANSCRIBE_WORKERS={loaded} 확정")
 
 
+def _shrink_pool():
+    """추론 중 OOM 발생 시 풀에서 인스턴스 하나를 영구 제거해 VRAM 여유를 확보한다."""
+    global _pool
+    if _pool is None:
+        return
+    try:
+        _pool.get_nowait()
+        print(f"  [VRAM] 추론 중 OOM → 인스턴스 1개 제거, 남은 풀: {_pool.qsize()}개")
+    except Exception:
+        pass
+
+
 def get_pool_size() -> int:
     """실제 로드된 모델 인스턴스 수 반환 (init_model_pool 호출 후 사용)."""
     return _pool.qsize() if _pool is not None else 0
@@ -178,18 +190,31 @@ def _transcribe_with(model, video_path: str, start: float = 0.0,
             )
             return model.transcribe(wav_path, **kwargs)
 
+        def _is_cuda_oom(e: Exception) -> bool:
+            err = str(e).lower()
+            return any(k in err for k in ("out of memory", "cublas", "cuda"))
+
+        def _run_and_collect(lang, batch_size) -> tuple:
+            """transcribe 실행 + 세그먼트 eager 소비. OOM은 호출자가 처리."""
+            seg_iter, inf = _run_transcribe(lang, batch_size)
+            # lazy generator를 즉시 소비 → 추론 중 OOM도 여기서 발생
+            raw = list(seg_iter)
+            return raw, inf
+
         # CUDA OOM 시 batch_size 줄여서 재시도
+        raw_segments = None
         for batch_size in (4, 2, 1):
             try:
-                segments_iter, info = _run_transcribe(whisper_lang, batch_size)
+                raw_segments, info = _run_and_collect(whisper_lang, batch_size)
                 break
             except RuntimeError as e:
-                err = str(e).lower()
-                if any(k in err for k in ("out of memory", "cublas", "cuda")):
-                    if batch_size == 1:
-                        raise
-                    continue
-                raise
+                if not _is_cuda_oom(e):
+                    raise
+                if batch_size == 1:
+                    # 인스턴스 하나를 풀에서 영구 제거해 VRAM 여유 확보
+                    _shrink_pool()
+                    raise
+                continue
 
         # auto 모드: 한국어/영어 외 감지되면 한국어로 재시도
         # (distil 모델은 영어 전용이므로 재시도 불필요)
@@ -197,18 +222,18 @@ def _transcribe_with(model, video_path: str, start: float = 0.0,
         if whisper_lang is None and not is_distil and info.language not in ("ko", "en"):
             for batch_size in (4, 2, 1):
                 try:
-                    segments_iter, info = _run_transcribe("ko", batch_size)
+                    raw_segments, info = _run_and_collect("ko", batch_size)
                     break
                 except RuntimeError as e:
-                    err = str(e).lower()
-                    if any(k in err for k in ("out of memory", "cublas", "cuda")):
-                        if batch_size == 1:
-                            raise
-                        continue
-                    raise
+                    if not _is_cuda_oom(e):
+                        raise
+                    if batch_size == 1:
+                        _shrink_pool()
+                        raise
+                    continue
 
         segments = []
-        for seg in segments_iter:
+        for seg in raw_segments:
             words = []
             if seg.words:
                 words = [
