@@ -186,8 +186,12 @@ def _call_gemini(prompt: str, duration: float) -> Tuple[Optional[dict], bool]:
 
 # ─── 공통 유틸 ───────────────────────────────────────────────────────────────
 def _is_rate_limit(e: Exception) -> bool:
+    """rate limit 또는 크레딧 소진 등 다음 API로 폴백해야 하는 에러."""
     s = str(e).lower()
-    return any(k in s for k in ("429", "rate_limit", "rate limit", "quota", "resource_exhausted"))
+    return any(k in s for k in (
+        "429", "rate_limit", "rate limit", "quota", "resource_exhausted",
+        "credit balance", "too low", "billing",
+    ))
 
 
 def _parse_response(text: str, duration: float) -> Optional[dict]:
