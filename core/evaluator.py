@@ -168,10 +168,6 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
 
     transcript_text = _build_transcript_text(transcript)
 
-    apis = _get_apis()
-    if not apis:
-        return _rule_based_eval(duration, has_speech, speech_sec)
-
     prompt = EVAL_PROMPT.format(
         duration=duration, width=w, height=h,
         orientation="(세로 영상)" if is_portrait else "(가로 영상)",
@@ -182,7 +178,8 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
     )
 
     with _adaptive.slot():
-        for name, caller in apis:
+        # 슬롯 진입 직후 최신 가용 API 목록 조회 (비활성화 반영)
+        for name, caller in _get_apis():
             result, rate_limited = caller(prompt, duration)
             if result is not None:
                 _adaptive.on_success()
