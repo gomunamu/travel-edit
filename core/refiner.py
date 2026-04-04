@@ -32,18 +32,15 @@ def refine_transcript(transcript: dict, api_key: str, model: str) -> dict:
     if not transcript.get("has_speech") or not transcript.get("segments"):
         return transcript
 
-    import anthropic
-
     segments = transcript["segments"]
     texts = [s.get("text", "").strip() for s in segments]
 
-    # 빈 텍스트만 있으면 건너뜀
     if not any(texts):
         return transcript
 
-    client = anthropic.Anthropic(api_key=api_key)
-
     try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
             model=model,
             max_tokens=4096,

@@ -244,7 +244,7 @@ def refine_all(
             need_refine.append(seg)
 
     if not need_refine:
-        # 정제 캐시가 없는 세그먼트는 원본 사용
+        print(f"  → 전체 {len(refined_map)}개 캐시 재사용 (STT 정제 건너뜀)")
         for h, t in transcripts.items():
             if h not in refined_map:
                 refined_map[h] = t
@@ -258,8 +258,12 @@ def refine_all(
     def _refine_one(seg):
         h = seg["clip_hash"]
         original = transcripts[h]
-        with semaphore:
-            result = refine_transcript(original, ANTHROPIC_API_KEY, STT_REFINE_MODEL)
+        try:
+            with semaphore:
+                result = refine_transcript(original, ANTHROPIC_API_KEY, STT_REFINE_MODEL)
+        except Exception as e:
+            print(f"\n  [경고] STT 정제 실패 ({Path(seg['filepath']).name}): {e}")
+            result = original  # 실패해도 원본으로 캐시 저장 → 재실행 시 재시도 안 함
         cache.save(h, "transcript_refined", result)
         with lock:
             refined_map[h] = result
