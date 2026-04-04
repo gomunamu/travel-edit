@@ -115,16 +115,26 @@ class AdaptiveConcurrency:
 _adaptive = AdaptiveConcurrency(initial=3, min_w=1, max_w=50, increase_after=5)
 
 
-# ─── API 가용성 관리 (rate limit 시 일시 비활성화) ─────────────────────────
-_api_lock    = threading.Lock()
-_disabled_until: dict = {}   # {"Claude": timestamp, ...}
-_COOLDOWN = 60.0             # rate limit 후 재시도까지 대기 시간(초)
+# ─── API 가용성 관리 (지수 백오프 + 세션 영구 비활성화) ────────────────────
+_api_lock       = threading.Lock()
+_disabled_until: dict = {}   # {"Claude": timestamp}
+_fail_count:     dict = {}   # {"Claude": int}
+_COOLDOWN_BASE   = 60.0      # 첫 번째 실패 후 대기(초)
+_MAX_FAILS       = 4         # 이 횟수 초과 시 세션 내 영구 비활성화
 
 
 def _disable_api(name: str):
     import time
     with _api_lock:
-        _disabled_until[name] = time.time() + _COOLDOWN
+        count = _fail_count.get(name, 0) + 1
+        _fail_count[name] = count
+        if count > _MAX_FAILS:
+            _disabled_until[name] = float("inf")  # 세션 내 영구 비활성화
+            print(f"  [API 비활성화] {name} 반복 실패({count}회) → 세션 내 사용 안 함")
+        else:
+            cooldown = _COOLDOWN_BASE * (2 ** (count - 1))  # 60 → 120 → 240 → 480
+            _disabled_until[name] = time.time() + cooldown
+            print(f"  [API 쿨다운] {name} {cooldown:.0f}초 대기 (실패 {count}/{_MAX_FAILS}회)")
 
 
 def _get_apis():
@@ -140,7 +150,7 @@ def _get_apis():
         all_apis.append(("Gemini",  _call_gemini))
     with _api_lock:
         available = [(n, fn) for n, fn in all_apis
-                     if now >= _disabled_until.get(n, 0)]
+                     if now < _disabled_until.get(n, float("inf"))]
     return available
 
 
@@ -183,7 +193,7 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
                 _disable_api(name)
                 remaining = _get_apis()
                 next_name = remaining[0][0] if remaining else "규칙 기반"
-                print(f"  [rate limit] {name} → {next_name} 으로 전환 ({name} {_COOLDOWN:.0f}초 비활성화)")
+                print(f"  [rate limit] {name} → {next_name} 으로 전환")
 
         _adaptive.on_success()
         return _rule_based_eval(duration, has_speech, speech_sec)
