@@ -14,6 +14,8 @@ _pool_lock = threading.Lock()
 _pool_total = 0          # 체크아웃 중 포함 전체 살아있는 인스턴스 수
 _pool_total_lock = threading.Lock()
 _shrink_lock = threading.Lock()  # OOM 시 한 번에 1개만 폐기되도록 직렬화
+_last_shrink_time = 0.0
+_SHRINK_COOLDOWN = 20.0  # 폐기 후 최소 대기 시간(초) — 연속 과잉 폐기 방지
 
 # distil-whisper 단축명 → HuggingFace 모델 ID 매핑
 _DISTIL_ALIASES = {
@@ -151,7 +153,7 @@ def transcribe(video_path: str, start: float = 0.0, duration: float = None,
     다음 가용 인스턴스로 재시도. 인스턴스가 모두 소진되면 예외 발생.
     """
     import time
-    global _pool_total
+    global _pool_total, _last_shrink_time
     pool = _get_pool()
 
     while True:
@@ -167,25 +169,27 @@ def transcribe(video_path: str, start: float = 0.0, duration: float = None,
                 raise
             # OOM: 이 모델은 일단 풀에 반납
             pool.put(model)
-            # 동시에 여러 워커가 OOM 나도 딱 1개만 폐기
+            # 동시에 여러 워커가 OOM 나도 딱 1개만 폐기, 쿨다운 내엔 폐기 안 함
             if _shrink_lock.acquire(blocking=False):
                 try:
-                    try:
-                        victim = pool.get_nowait()  # 유휴 인스턴스 1개 꺼내 폐기
-                        with _pool_total_lock:
-                            _pool_total -= 1
-                            remaining_total = _pool_total
-                        print(f"  [VRAM] OOM → 인스턴스 1개 폐기, 전체 {remaining_total}개 남음")
-                        if remaining_total == 0:
-                            raise RuntimeError("CUDA OOM: 인스턴스가 모두 소진됨. VRAM 부족.")
-                        del victim
-                    except queue.Empty:
-                        # 모두 체크아웃 중 → 이번엔 폐기 못함, 재시도만
-                        pass
+                    now = time.time()
+                    if now - _last_shrink_time >= _SHRINK_COOLDOWN:
+                        try:
+                            victim = pool.get_nowait()  # 유휴 인스턴스 1개 꺼내 폐기
+                            with _pool_total_lock:
+                                _pool_total -= 1
+                                remaining_total = _pool_total
+                            _last_shrink_time = now
+                            print(f"  [VRAM] OOM → 인스턴스 1개 폐기, 전체 {remaining_total}개 남음")
+                            del victim
+                            if remaining_total == 0:
+                                raise RuntimeError("CUDA OOM: 인스턴스가 모두 소진됨. VRAM 부족.")
+                        except queue.Empty:
+                            pass  # 모두 체크아웃 중 → 폐기 건너뜀
+                    # else: 쿨다운 중 → 폐기 없이 재시도만
                 finally:
                     _shrink_lock.release()
-            # else: 다른 워커가 이미 폐기 중 → 기다렸다가 재시도
-            time.sleep(1)
+            time.sleep(3)  # 다른 워커들이 현재 추론을 마칠 시간
 
 
 # Whisper 언어 코드 매핑 (config SUBTITLE_LANG → Whisper language code)
