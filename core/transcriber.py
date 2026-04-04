@@ -11,6 +11,8 @@ from config import WHISPER_MODEL, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE
 
 _pool: Optional[queue.Queue] = None
 _pool_lock = threading.Lock()
+_pool_total = 0          # 체크아웃 중 포함 전체 살아있는 인스턴스 수
+_pool_total_lock = threading.Lock()
 
 # distil-whisper 단축명 → HuggingFace 모델 ID 매핑
 _DISTIL_ALIASES = {
@@ -87,19 +89,9 @@ def init_model_pool(n: int = 0):
                 raise
         if loaded == 0:
             raise RuntimeError("Whisper 모델을 하나도 로드할 수 없습니다. VRAM을 확인하세요.")
+        global _pool_total
+        _pool_total = loaded
         print(f"  → TRANSCRIBE_WORKERS={loaded} 확정")
-
-
-def _shrink_pool() -> bool:
-    """풀에서 유휴 인스턴스 하나를 영구 제거. 제거 성공 시 True 반환."""
-    global _pool
-    if _pool is None:
-        return False
-    try:
-        _pool.get_nowait()  # 제거 (GC에 맡김)
-        return True
-    except Exception:
-        return False
 
 
 def get_pool_size() -> int:
@@ -154,32 +146,33 @@ def transcribe(video_path: str, start: float = 0.0, duration: float = None,
                force_lang: str = None) -> dict:
     """
     음성 인식 실행, TranscriptDict 반환.
-    CUDA OOM 발생 시 풀에서 인스턴스를 하나 제거하고 재시도.
-    풀이 완전히 비어도 1개는 남겨서 재시도.
+    CUDA OOM 발생 시 해당 인스턴스를 폐기(풀에 반납 안 함)하고
+    다음 가용 인스턴스로 재시도. 인스턴스가 모두 소진되면 예외 발생.
     """
+    import time
+    global _pool_total
     pool = _get_pool()
-    max_attempts = _MAX_AUTO_WORKERS + 1
-    for attempt in range(max_attempts):
-        model = pool.get()
+
+    while True:
+        model = pool.get()  # 가용 인스턴스 대기
         try:
-            return _transcribe_with(model, video_path, start=start,
-                                    duration=duration, force_lang=force_lang)
+            result = _transcribe_with(model, video_path, start=start,
+                                      duration=duration, force_lang=force_lang)
+            pool.put(model)  # 성공: 반납
+            return result
         except RuntimeError as e:
             if not _is_cuda_oom(e):
                 pool.put(model)
                 raise
-            # OOM: 현재 모델을 반납하고 유휴 인스턴스 하나 제거
-            pool.put(model)
-            removed = _shrink_pool()
-            remaining = pool.qsize()
-            print(f"  [VRAM] OOM → 인스턴스 {'제거' if removed else '제거 실패'}, "
-                  f"풀 잔여: {remaining}개 (재시도 {attempt + 1}/{max_attempts - 1})")
-            if remaining == 0:
-                # 모든 인스턴스가 체크아웃 중 → 1개 남을 때까지 대기 후 포기
-                raise
-        # 재시도 전 잠시 대기 (다른 워커들이 VRAM 반환할 시간)
-        import time; time.sleep(1)
-    raise RuntimeError("CUDA OOM: 반복 재시도 실패")
+            # OOM: 이 인스턴스를 폐기 → 총 개수 자연 감소
+            with _pool_total_lock:
+                _pool_total -= 1
+                remaining_total = _pool_total
+            print(f"  [VRAM] OOM → 인스턴스 폐기, 전체 {remaining_total}개 남음, 재시도...")
+            if remaining_total == 0:
+                raise RuntimeError("CUDA OOM: 인스턴스가 모두 소진됨. VRAM 부족.")
+            time.sleep(1)  # 다른 워커들이 VRAM 반환할 시간
+            # 루프 재진입 → pool.get()으로 다음 가용 인스턴스 대기
 
 
 # Whisper 언어 코드 매핑 (config SUBTITLE_LANG → Whisper language code)
