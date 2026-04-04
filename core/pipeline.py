@@ -281,6 +281,48 @@ def refine_all(
     return refined_map
 
 
+# ─── 4-c. 자막 / 위치 미리보기 출력 ──────────────────────────────────────
+def print_clip_preview(segments: List[dict], transcripts: Dict[str, dict]) -> None:
+    """
+    STT 정제 완료 후 클립별 최종 자막 텍스트와 위치 정보를 출력한다.
+    위치는 이전 클립과 달라질 때만 표시.
+    """
+    prev_location: Optional[str] = None
+    print()
+
+    for seg in segments:
+        h = seg["clip_hash"]
+        transcript = transcripts.get(h)
+
+        # 위치 (변경 시에만)
+        location: Optional[str] = None
+        if seg.get("gps"):
+            location = coords_to_str(seg["gps"])
+        if location and location != prev_location:
+            print(f"  📍 {location}")
+            prev_location = location
+
+        # 자막 텍스트 수집
+        speech_lines = []
+        if transcript:
+            for s in transcript.get("segments", []):
+                text = s.get("text", "").strip()
+                if text and s.get("no_speech_prob", 1.0) < 0.5:
+                    speech_lines.append(text)
+
+        filename = Path(seg["filename"]).stem
+        src_start = seg.get("_src_start", 0.0)
+        dur = seg.get("duration", 0.0)
+        label = f"  [{filename}  {src_start:.0f}~{src_start+dur:.0f}s]"
+
+        if speech_lines:
+            # 첫 줄은 label과 같은 줄에, 나머지는 들여쓰기
+            print(f"{label} {speech_lines[0]}")
+            for line in speech_lines[1:]:
+                print(f"{'':>{len(label)+1}}{line}")
+        # 무음 클립은 출력 생략
+
+
 # ─── 5. AI 평가 (병렬 - Claude API) ───────────────────────────────────────
 def evaluate_all(
     segments: List[dict],
@@ -515,6 +557,10 @@ def run(input_folder: str, output_folder: str):
             _token_tracker.print_current("4-b STT 정제 후")
         elif _config.STT_REFINE and not _config.ANTHROPIC_API_KEY:
             print("\n[4-b] STT 정제 건너뜀 (ANTHROPIC_API_KEY 없음)")
+
+        # 4-c. 자막 / 위치 미리보기
+        print("\n[4-c] 자막 미리보기 (최종):")
+        print_clip_preview(segments, transcripts)
 
     # 5. AI 평가
     print("\n[5/6] AI 클립 평가...")
