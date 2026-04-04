@@ -88,7 +88,7 @@ def main():
     )
     parser.add_argument(
         "--workers", type=int, default=None,
-        help="렌더링 병렬 워커 수 (기본: CPU코어수//2)"
+        help="렌더링 병렬 워커 수, 곧 NAS 동시 연결 수 상한 (기본: CPU코어수//2)"
     )
     parser.add_argument(
         "--skip-transcribe", action="store_true",
