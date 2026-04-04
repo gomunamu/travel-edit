@@ -8,7 +8,11 @@ if _env_path.exists():
         _line = _line.strip()
         if _line and not _line.startswith("#") and "=" in _line:
             _k, _, _v = _line.partition("=")
-            os.environ.setdefault(_k.strip(), _v.strip())
+            # 인라인 주석 제거: 따옴표 없는 값에서 # 이후 삭제
+            _v = _v.strip()
+            if not (_v.startswith('"') or _v.startswith("'")):
+                _v = _v.split("#")[0].strip()
+            os.environ.setdefault(_k.strip(), _v)
 
 # === 파이프라인 설정 ===
 MAX_SEGMENT_DURATION = 30          # 이 시간(초) 이상인 클립은 자동 분할
