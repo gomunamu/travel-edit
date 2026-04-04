@@ -137,9 +137,16 @@ def _disable_api(name: str):
             print(f"  [API 쿨다운] {name} {cooldown:.0f}초 대기 (실패 {count}/{_MAX_FAILS}회)")
 
 
+_rr_index = 0  # 라운드로빈 시작 인덱스
+
+
 def _get_apis():
-    """현재 활성화된 API 목록을 우선순위 순으로 반환."""
+    """
+    현재 활성화된 API 목록을 라운드로빈 순서로 반환.
+    모든 가용 API에 고르게 부하를 분산한다.
+    """
     import time
+    global _rr_index
     now = time.time()
     all_apis = []
     if ANTHROPIC_API_KEY:
@@ -151,7 +158,11 @@ def _get_apis():
     with _api_lock:
         available = [(n, fn) for n, fn in all_apis
                      if now < _disabled_until.get(n, float("inf"))]
-    return available
+        if not available:
+            return []
+        start = _rr_index % len(available)
+        _rr_index += 1
+    return available[start:] + available[:start]
 
 
 # ─── 평가 진입점 ─────────────────────────────────────────────────────────────
