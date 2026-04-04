@@ -123,12 +123,12 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Loc,{font},{scaled_font},&H00FFFFFF,&H000000FF,&H00000000,&HAA000000,0,0,0,0,100,100,0,0,1,2,1,1,{scaled_margin},{scaled_margin},{scaled_margin},1
+Style: Loc,{font},{scaled_font},&H00FFFFFF,&H000000FF,&H00000000,&HAA000000,0,0,0,0,100,100,0,0,1,2,1,3,{scaled_margin},{scaled_margin},{scaled_margin},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-    # Alignment 1 = 좌하단 (iPhone/Synology 스타일)
+    # Alignment 3 = 우하단, MarginR이 오른쪽 여백, MarginV가 하단 여백
     fade_ms = int(fade_duration * 1000)
     text = location_name.replace(",", "\\,")
     event = (

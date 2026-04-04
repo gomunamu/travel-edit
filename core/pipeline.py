@@ -421,8 +421,8 @@ def render_day(
         loc_path = None
         loc_name = clip.get("show_location")
         if loc_name:
-            loc_path = cache.ass_path(h, "location")
-            if not cache.ass_exists(h, "location"):
+            loc_path = cache.ass_path(h, "location_r")
+            if not cache.ass_exists(h, "location_r"):
                 make_location_ass(
                     loc_name, clip_dur, loc_path, out_res,
                     display_duration=LOCATION_DISPLAY_DURATION,
