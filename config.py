@@ -63,7 +63,7 @@ LOCATION_MARGIN = 20               # 우하단 여백(px)
 # .env 또는 환경변수로 덮어쓸 수 있음. 미설정 시 "large-v3" 사용.
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "large-v3")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
-WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
+WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
 
 # === 자막 설정 (언어/방식) ===
 SUBTITLE_LANG = os.environ.get("SUBTITLE_LANG", "auto")    # auto|ko|en|ja|zh|off
