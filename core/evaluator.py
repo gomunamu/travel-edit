@@ -16,7 +16,7 @@ SYSTEM_PROMPT = """당신은 10년 경력의 여행 브이로그 편집자이자
 여행 동영상의 각 클립을 분석하고, 최종 편집본에 포함할지 결정합니다.
 시청자가 지루하지 않도록, 재미있고 감동적인 장면만 선별하는 것이 목표입니다."""
 
-EVAL_PROMPT = """다음 클립 정보를 분석하고 편집 결정을 내려주세요.
+EVAL_PROMPT = """다음 클립 정보를 분석하고 편집 결정과 품질 점수를 출력하세요.
 
 ## 클립 정보
 - 길이: {duration:.1f}초
@@ -27,12 +27,19 @@ EVAL_PROMPT = """다음 클립 정보를 분석하고 편집 결정을 내려주
 ## 음성 전사
 {transcript_text}
 
-## 판단 기준
+## 편집 판단 기준
 1. 음성 없이 풍경만 {threshold}초 이상 → 지루하지 않게 잘라서 살리거나, 완전히 버리기
 2. 재미있는 혼잣말/대화/반응 → 살리기
 3. 같은 장면이 너무 길게 이어지면 → 앞뒤 잘라서 살리기
 4. 너무 흔들리거나 무의미한 장면 → 버리기
 5. 2초 미만 → 항상 버리기
+
+## 품질 점수 기준 (편집 결정과 무관하게 독립적으로 평가)
+각 항목을 0~25점으로 채점하세요.
+- visual  (시각 품질): 화면 안정성, 노출·구도 완성도 (흔들림·역광·흐림 감점)
+- speech  (음성·대화): 대화·혼잣말·감정 표현의 흥미도 (무음이면 0점 가능)
+- scene   (장면 가치): 여행 장소·활동·경험의 희소성·감동 (평범한 이동 장면 감점)
+- flow    (편집 흐름): 독립 장면으로의 완결성, 앞뒤 클립과 이어지기 쉬운 정도
 
 ## 응답 형식 (JSON만 출력)
 {{
@@ -40,10 +47,15 @@ EVAL_PROMPT = """다음 클립 정보를 분석하고 편집 결정을 내려주
   "reason": "한국어로 간단한 이유",
   "keep_start": 0.0,
   "keep_end": {duration:.1f},
-  "interest_score": 1~10
+  "score": {{
+    "visual": 0~25,
+    "speech": 0~25,
+    "scene": 0~25,
+    "flow": 0~25
+  }}
 }}
 
-단, trim인 경우 keep_start와 keep_end를 반드시 지정하세요."""
+trim인 경우 keep_start와 keep_end를 반드시 지정하세요."""
 
 # ─── 라운드로빈 상태 ────────────────────────────────────────────────────────
 _rr_lock   = threading.Lock()
@@ -179,17 +191,31 @@ def _is_rate_limit(e: Exception) -> bool:
 
 
 def _parse_response(text: str, duration: float) -> Optional[dict]:
-    match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+    # 중첩 JSON을 포함한 전체 객체 추출
+    match = re.search(r'\{.*\}', text, re.DOTALL)
     if not match:
         return None
     try:
         r = json.loads(match.group())
+        raw_score = r.get("score", {})
+        if isinstance(raw_score, dict):
+            visual = max(0, min(25, int(raw_score.get("visual", 12))))
+            speech = max(0, min(25, int(raw_score.get("speech", 12))))
+            scene  = max(0, min(25, int(raw_score.get("scene",  12))))
+            flow   = max(0, min(25, int(raw_score.get("flow",   12))))
+        else:
+            visual = speech = scene = flow = 12
+        score = {
+            "visual": visual, "speech": speech,
+            "scene": scene, "flow": flow,
+            "total": visual + speech + scene + flow,
+        }
         return {
-            "decision":       r.get("decision", "keep"),
-            "reason":         r.get("reason", ""),
-            "keep_start":     float(r.get("keep_start", 0)),
-            "keep_end":       float(r.get("keep_end", duration)),
-            "interest_score": int(r.get("interest_score", 5)),
+            "decision":   r.get("decision", "keep"),
+            "reason":     r.get("reason", ""),
+            "keep_start": float(r.get("keep_start", 0)),
+            "keep_end":   float(r.get("keep_end", duration)),
+            "score":      score,
         }
     except (json.JSONDecodeError, ValueError):
         return None
@@ -205,17 +231,26 @@ def _build_transcript_text(transcript: dict) -> str:
 
 def _rule_based_eval(duration: float, has_speech: bool, speech_sec: float) -> dict:
     if not has_speech and duration > PURE_LANDSCAPE_THRESHOLD:
-        return _decision("trim", "음성 없는 긴 풍경 - 앞부분만 유지", 0, min(8.0, duration), 4)
+        return _decision("trim", "음성 없는 긴 풍경 - 앞부분만 유지", 0, min(8.0, duration), 35)
     if has_speech and speech_sec > 2:
-        return _decision("keep", "음성 포함", 0, duration, 7)
+        return _decision("keep", "음성 포함", 0, duration, 60)
     if duration <= 10:
-        return _decision("keep", "짧은 클립 유지", 0, duration, 5)
-    return _decision("keep", "기본 유지", 0, duration, 5)
+        return _decision("keep", "짧은 클립 유지", 0, duration, 50)
+    return _decision("keep", "기본 유지", 0, duration, 50)
 
 
-def _decision(decision: str, reason: str, start: float, end: float, score: int) -> dict:
+def _decision(decision: str, reason: str, start: float, end: float, total: int) -> dict:
+    # total: 규칙 기반 추정 점수 (0-100), 세부 항목은 균등 분배
+    q, r = divmod(max(0, min(100, total)), 4)
+    score = {
+        "visual": q + (1 if r > 0 else 0),
+        "speech": q + (1 if r > 1 else 0),
+        "scene":  q + (1 if r > 2 else 0),
+        "flow":   q,
+        "total":  total,
+    }
     return {
         "decision": decision, "reason": reason,
         "keep_start": start,  "keep_end": end,
-        "interest_score": score,
+        "score": score,
     }

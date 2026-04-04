@@ -345,7 +345,9 @@ def render_day(
         decision = ev.get("decision", "keep")
 
         if decision == "discard":
-            print(f"    [버림 {ev.get('interest_score','?')}점] {seg['filename']} - {ev.get('reason','')}")
+            sc = ev.get("score", {})
+            total = sc.get("total", "?")
+            print(f"    [버림 {total:>3}점] {seg['filename']} - {ev.get('reason','')}")
             continue
 
         clip = dict(seg)
@@ -368,8 +370,16 @@ def render_day(
 
         clip["eval"] = ev
         selected.append(clip)
+        sc = ev.get("score", {})
+        total  = sc.get("total",  "?")
+        visual = sc.get("visual", "-")
+        speech = sc.get("speech", "-")
+        scene  = sc.get("scene",  "-")
+        flow   = sc.get("flow",   "-")
+        tag = "트림" if decision == "trim" else "살림"
         print(
-            f"    [{'트림' if decision=='trim' else '살림'} {ev.get('interest_score','?')}점] "
+            f"    [{tag} {total:>3}점"
+            f"  시각{visual}/음성{speech}/장면{scene}/흐름{flow}] "
             f"{seg['filename']} {clip['trim_start']:.1f}~{clip['trim_end']:.1f}s"
             f"  {ev.get('reason','')}"
         )
