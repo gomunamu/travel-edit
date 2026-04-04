@@ -90,16 +90,16 @@ def init_model_pool(n: int = 0):
         print(f"  → TRANSCRIBE_WORKERS={loaded} 확정")
 
 
-def _shrink_pool():
-    """추론 중 OOM 발생 시 풀에서 인스턴스 하나를 영구 제거해 VRAM 여유를 확보한다."""
+def _shrink_pool() -> bool:
+    """풀에서 유휴 인스턴스 하나를 영구 제거. 제거 성공 시 True 반환."""
     global _pool
     if _pool is None:
-        return
+        return False
     try:
-        _pool.get_nowait()
-        print(f"  [VRAM] 추론 중 OOM → 인스턴스 1개 제거, 남은 풀: {_pool.qsize()}개")
+        _pool.get_nowait()  # 제거 (GC에 맡김)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def get_pool_size() -> int:
@@ -145,16 +145,41 @@ def _extract_audio(video_path: str, wav_path: str,
     subprocess.run(cmd, capture_output=True, timeout=120)
 
 
+def _is_cuda_oom(e: Exception) -> bool:
+    err = str(e).lower()
+    return any(k in err for k in ("out of memory", "cublas", "cuda"))
+
+
 def transcribe(video_path: str, start: float = 0.0, duration: float = None,
                force_lang: str = None) -> dict:
-    """음성 인식 실행, TranscriptDict 반환. 풀에서 모델을 빌려 쓰고 반납."""
+    """
+    음성 인식 실행, TranscriptDict 반환.
+    CUDA OOM 발생 시 풀에서 인스턴스를 하나 제거하고 재시도.
+    풀이 완전히 비어도 1개는 남겨서 재시도.
+    """
     pool = _get_pool()
-    model = pool.get()
-    try:
-        return _transcribe_with(model, video_path, start=start,
-                                duration=duration, force_lang=force_lang)
-    finally:
-        pool.put(model)
+    max_attempts = _MAX_AUTO_WORKERS + 1
+    for attempt in range(max_attempts):
+        model = pool.get()
+        try:
+            return _transcribe_with(model, video_path, start=start,
+                                    duration=duration, force_lang=force_lang)
+        except RuntimeError as e:
+            if not _is_cuda_oom(e):
+                pool.put(model)
+                raise
+            # OOM: 현재 모델을 반납하고 유휴 인스턴스 하나 제거
+            pool.put(model)
+            removed = _shrink_pool()
+            remaining = pool.qsize()
+            print(f"  [VRAM] OOM → 인스턴스 {'제거' if removed else '제거 실패'}, "
+                  f"풀 잔여: {remaining}개 (재시도 {attempt + 1}/{max_attempts - 1})")
+            if remaining == 0:
+                # 모든 인스턴스가 체크아웃 중 → 1개 남을 때까지 대기 후 포기
+                raise
+        # 재시도 전 잠시 대기 (다른 워커들이 VRAM 반환할 시간)
+        import time; time.sleep(1)
+    raise RuntimeError("CUDA OOM: 반복 재시도 실패")
 
 
 # Whisper 언어 코드 매핑 (config SUBTITLE_LANG → Whisper language code)
@@ -175,10 +200,10 @@ def _transcribe_with(model, video_path: str, start: float = 0.0,
         if not Path(wav_path).exists() or Path(wav_path).stat().st_size < 1000:
             return _empty_transcript()
 
-        def _run_transcribe(lang, batch_size=4):
+        def _run_transcribe(lang):
             kwargs = dict(
                 language=lang,
-                batch_size=batch_size,
+                batch_size=4,
                 beam_size=5,
                 vad_filter=True,
                 vad_parameters=dict(
@@ -190,47 +215,18 @@ def _transcribe_with(model, video_path: str, start: float = 0.0,
             )
             return model.transcribe(wav_path, **kwargs)
 
-        def _is_cuda_oom(e: Exception) -> bool:
-            err = str(e).lower()
-            return any(k in err for k in ("out of memory", "cublas", "cuda"))
+        def _run_and_collect(lang) -> tuple:
+            """transcribe 실행 + 세그먼트 eager 소비. OOM은 호출자(transcribe)가 처리."""
+            seg_iter, inf = _run_transcribe(lang)
+            return list(seg_iter), inf  # lazy generator 즉시 소비
 
-        def _run_and_collect(lang, batch_size) -> tuple:
-            """transcribe 실행 + 세그먼트 eager 소비. OOM은 호출자가 처리."""
-            seg_iter, inf = _run_transcribe(lang, batch_size)
-            # lazy generator를 즉시 소비 → 추론 중 OOM도 여기서 발생
-            raw = list(seg_iter)
-            return raw, inf
-
-        # CUDA OOM 시 batch_size 줄여서 재시도
-        raw_segments = None
-        for batch_size in (4, 2, 1):
-            try:
-                raw_segments, info = _run_and_collect(whisper_lang, batch_size)
-                break
-            except RuntimeError as e:
-                if not _is_cuda_oom(e):
-                    raise
-                if batch_size == 1:
-                    # 인스턴스 하나를 풀에서 영구 제거해 VRAM 여유 확보
-                    _shrink_pool()
-                    raise
-                continue
+        raw_segments, info = _run_and_collect(whisper_lang)
 
         # auto 모드: 한국어/영어 외 감지되면 한국어로 재시도
         # (distil 모델은 영어 전용이므로 재시도 불필요)
         is_distil = WHISPER_MODEL.lower().startswith("distil")
         if whisper_lang is None and not is_distil and info.language not in ("ko", "en"):
-            for batch_size in (4, 2, 1):
-                try:
-                    raw_segments, info = _run_and_collect("ko", batch_size)
-                    break
-                except RuntimeError as e:
-                    if not _is_cuda_oom(e):
-                        raise
-                    if batch_size == 1:
-                        _shrink_pool()
-                        raise
-                    continue
+            raw_segments, info = _run_and_collect("ko")
 
         segments = []
         for seg in raw_segments:
