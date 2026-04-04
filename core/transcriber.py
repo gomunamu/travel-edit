@@ -12,6 +12,17 @@ from config import WHISPER_MODEL, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE
 _pool: Optional[queue.Queue] = None
 _pool_lock = threading.Lock()
 
+# distil-whisper 단축명 → HuggingFace 모델 ID 매핑
+_DISTIL_ALIASES = {
+    "distil-large-v3":  "Systran/faster-distil-whisper-large-v3",
+    "distil-large-v2":  "Systran/faster-distil-whisper-large-v2",
+    "distil-medium.en": "Systran/faster-distil-whisper-medium.en",
+    "distil-small.en":  "Systran/faster-distil-whisper-small.en",
+}
+
+def _resolve_model_name(name: str) -> str:
+    return _DISTIL_ALIASES.get(name.lower(), name)
+
 
 def _load_one_model():
     from faster_whisper import WhisperModel, BatchedInferencePipeline
@@ -19,6 +30,7 @@ def _load_one_model():
 
     device = WHISPER_DEVICE
     compute = WHISPER_COMPUTE_TYPE
+    model_name = _resolve_model_name(WHISPER_MODEL)
 
     if device == "cuda":
         if ctranslate2.get_cuda_device_count() == 0:
@@ -29,7 +41,7 @@ def _load_one_model():
             compute = "float16"
 
     base = WhisperModel(
-        WHISPER_MODEL,
+        model_name,
         device=device,
         compute_type=compute,
         num_workers=1,
@@ -39,33 +51,43 @@ def _load_one_model():
     return BatchedInferencePipeline(model=base), device
 
 
-def init_model_pool(n: int = 1):
+_MAX_AUTO_WORKERS = 8  # auto 모드(n=0)일 때 시도할 최대 인스턴스 수
+
+
+def init_model_pool(n: int = 0):
     """
-    n개의 Whisper 모델 인스턴스를 미리 로드해 풀에 적재.
-    VRAM OOM 발생 시 그 전까지 로드된 수로 자동 조정.
+    Whisper 모델 인스턴스를 풀에 적재.
+    n=0 (auto): VRAM이 허용하는 한도까지 최대한 로드 (OOM 직전까지).
+    n>0: 지정한 수만큼 시도, VRAM 부족 시 자동 축소.
     """
     global _pool
     with _pool_lock:
         if _pool is not None:
             return
-        print(f"  Whisper 모델 로드 중: {WHISPER_MODEL} × 최대 {n}개 인스턴스")
+        auto = (n == 0)
+        target = _MAX_AUTO_WORKERS if auto else n
+        label = f"최대 {target}개 (VRAM 자동)" if auto else f"최대 {target}개"
+        print(f"  Whisper 모델 로드 중: {WHISPER_MODEL} × {label}")
         _pool = queue.Queue()
         loaded = 0
-        for i in range(n):
+        for i in range(target):
             try:
                 model, device = _load_one_model()
                 _pool.put(model)
                 loaded += 1
-                print(f"  ✓ 인스턴스 {loaded}/{n} 로드 완료 ({device.upper()})")
+                print(f"  ✓ 인스턴스 {loaded} 로드 완료 ({device.upper()})")
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
-                    print(f"  VRAM 부족으로 {loaded}개 인스턴스로 제한 (요청 {n}개)")
+                    if loaded == 0:
+                        raise RuntimeError(
+                            "Whisper 모델을 하나도 로드할 수 없습니다. VRAM을 확인하세요."
+                        )
+                    print(f"  VRAM 한계 도달 → {loaded}개 인스턴스로 확정")
                     break
                 raise
         if loaded == 0:
             raise RuntimeError("Whisper 모델을 하나도 로드할 수 없습니다. VRAM을 확인하세요.")
-        if loaded < n:
-            print(f"  → TRANSCRIBE_WORKERS={loaded} 으로 실행합니다. (.env에서 조정 가능)")
+        print(f"  → TRANSCRIBE_WORKERS={loaded} 확정")
 
 
 def get_pool_size() -> int:
@@ -170,7 +192,9 @@ def _transcribe_with(model, video_path: str, start: float = 0.0,
                 raise
 
         # auto 모드: 한국어/영어 외 감지되면 한국어로 재시도
-        if whisper_lang is None and info.language not in ("ko", "en"):
+        # (distil 모델은 영어 전용이므로 재시도 불필요)
+        is_distil = WHISPER_MODEL.lower().startswith("distil")
+        if whisper_lang is None and not is_distil and info.language not in ("ko", "en"):
             for batch_size in (4, 2, 1):
                 try:
                     segments_iter, info = _run_transcribe("ko", batch_size)

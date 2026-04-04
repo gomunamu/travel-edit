@@ -60,7 +60,10 @@ LOCATION_FONT_SIZE = 34
 LOCATION_MARGIN = 20               # 우하단 여백(px)
 
 # === Whisper 설정 ===
-# .env 또는 환경변수로 덮어쓸 수 있음. 미설정 시 "large-v3" 사용.
+# 표준 모델:    tiny | base | small | medium | large-v2 | large-v3
+# Distil 모델: distil-large-v3 | distil-large-v2 | distil-medium.en
+#              (영어 전용, 표준 대비 약 2배 빠름, 정확도 소폭 낮음)
+# .env: WHISPER_MODEL=distil-large-v3
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "large-v3")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
 WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
@@ -88,7 +91,8 @@ GEMINI_MODEL   = os.environ.get("GEMINI_MODEL",   "gemini-1.5-flash")
 # === 병렬 처리 설정 ===
 METADATA_WORKERS = 32          # NAS 환경: I/O 대기가 대부분 → 많을수록 유리
 SEGMENT_WORKERS = None             # None = max(4, cpu_count) — 전체 세그먼트 단일 풀 병렬
-TRANSCRIBE_WORKERS = 8             # 실제 로드 가능한 수는 VRAM에 따라 자동 제한됨
-                                   # OOM 발생 시 로드된 인스턴스 수로 자동 조정
+_tw = os.environ.get("TRANSCRIBE_WORKERS", "0")
+TRANSCRIBE_WORKERS = int(_tw) if _tw.isdigit() else 0
+# 0 = VRAM이 허용하는 한도까지 자동으로 최대한 로드 (OOM 직전까지)
 RENDER_WORKERS = int(os.environ.get("RENDER_WORKERS", "0")) or None
 # None → cpu_count // 2 로 자동 결정 (renderer.py 참고)
