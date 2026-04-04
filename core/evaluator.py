@@ -115,19 +115,22 @@ class AdaptiveConcurrency:
 _adaptive = AdaptiveConcurrency(initial=3, min_w=1, max_w=50, increase_after=5)
 
 
-# ─── 라운드로빈 상태 ────────────────────────────────────────────────────────
-_rr_lock   = threading.Lock()
-_rr_offset = 0   # rate limit 발생 시 +1 → 다음 API부터 시작
+# ─── API 가용성 관리 (rate limit 시 일시 비활성화) ─────────────────────────
+_api_lock    = threading.Lock()
+_disabled_until: dict = {}   # {"Claude": timestamp, ...}
+_COOLDOWN = 60.0             # rate limit 후 재시도까지 대기 시간(초)
 
 
-def _rotate():
-    global _rr_offset
-    with _rr_lock:
-        _rr_offset += 1
+def _disable_api(name: str):
+    import time
+    with _api_lock:
+        _disabled_until[name] = time.time() + _COOLDOWN
 
 
 def _get_apis():
-    """설정된 API 목록을 현재 오프셋 순서로 반환."""
+    """현재 활성화된 API 목록을 우선순위 순으로 반환."""
+    import time
+    now = time.time()
     all_apis = []
     if ANTHROPIC_API_KEY:
         all_apis.append(("Claude",  _call_claude))
@@ -135,11 +138,10 @@ def _get_apis():
         all_apis.append(("OpenAI",  _call_openai))
     if GEMINI_API_KEY:
         all_apis.append(("Gemini",  _call_gemini))
-    if not all_apis:
-        return []
-    with _rr_lock:
-        start = _rr_offset % len(all_apis)
-    return all_apis[start:] + all_apis[:start]
+    with _api_lock:
+        available = [(n, fn) for n, fn in all_apis
+                     if now >= _disabled_until.get(n, 0)]
+    return available
 
 
 # ─── 평가 진입점 ─────────────────────────────────────────────────────────────
@@ -178,10 +180,10 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
                 return result
             if rate_limited:
                 _adaptive.on_rate_limit()
-                _rotate()
-                apis2 = _get_apis()
-                next_name = apis2[0][0] if apis2 else "규칙 기반"
-                print(f"  [rate limit] {name} → {next_name} 으로 전환")
+                _disable_api(name)
+                remaining = _get_apis()
+                next_name = remaining[0][0] if remaining else "규칙 기반"
+                print(f"  [rate limit] {name} → {next_name} 으로 전환 ({name} {_COOLDOWN:.0f}초 비활성화)")
 
         _adaptive.on_success()
         return _rule_based_eval(duration, has_speech, speech_sec)
