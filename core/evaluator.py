@@ -115,54 +115,42 @@ class AdaptiveConcurrency:
 _adaptive = AdaptiveConcurrency(initial=3, min_w=1, max_w=50, increase_after=5)
 
 
-# ─── API 가용성 관리 (지수 백오프 + 세션 영구 비활성화) ────────────────────
+# ─── API 가용성 관리 (쿨다운 3회 실패 시 세션 영구 비활성화) ───────────────
+# 우선순위: Claude → OpenAI → Gemini (순차 강등)
 _api_lock       = threading.Lock()
-_disabled_until: dict = {}   # {"Claude": timestamp}
+_disabled_until: dict = {}   # {"Claude": timestamp or inf}
 _fail_count:     dict = {}   # {"Claude": int}
-_COOLDOWN_BASE   = 60.0      # 첫 번째 실패 후 대기(초)
-_MAX_FAILS       = 4         # 이 횟수 초과 시 세션 내 영구 비활성화
+_COOLDOWN        = 5.0       # 실패 후 재시도 대기(초)
+_MAX_FAILS       = 3         # 이 횟수 도달 시 세션 내 영구 비활성화
 
 
-def _disable_api(name: str):
+def _on_api_fail(name: str):
     import time
     with _api_lock:
         count = _fail_count.get(name, 0) + 1
         _fail_count[name] = count
-        if count > _MAX_FAILS:
-            _disabled_until[name] = float("inf")  # 세션 내 영구 비활성화
-            print(f"  [API 비활성화] {name} 반복 실패({count}회) → 세션 내 사용 안 함")
+        if count >= _MAX_FAILS:
+            _disabled_until[name] = float("inf")
+            print(f"  [API 비활성화] {name} {count}회 실패 → 이번 세션 사용 중단")
         else:
-            cooldown = _COOLDOWN_BASE * (2 ** (count - 1))  # 60 → 120 → 240 → 480
-            _disabled_until[name] = time.time() + cooldown
-            print(f"  [API 쿨다운] {name} {cooldown:.0f}초 대기 (실패 {count}/{_MAX_FAILS}회)")
-
-
-_rr_index = 0  # 라운드로빈 시작 인덱스
+            _disabled_until[name] = time.time() + _COOLDOWN
+            print(f"  [API 쿨다운] {name} {_COOLDOWN:.0f}초 대기 (실패 {count}/{_MAX_FAILS})")
 
 
 def _get_apis():
-    """
-    현재 활성화된 API 목록을 라운드로빈 순서로 반환.
-    모든 가용 API에 고르게 부하를 분산한다.
-    """
+    """우선순위(Claude→OpenAI→Gemini) 순으로 현재 활성화된 API 목록 반환."""
     import time
-    global _rr_index
     now = time.time()
-    all_apis = []
+    candidates = []
     if ANTHROPIC_API_KEY:
-        all_apis.append(("Claude",  _call_claude))
+        candidates.append(("Claude", _call_claude))
     if OPENAI_API_KEY:
-        all_apis.append(("OpenAI",  _call_openai))
+        candidates.append(("OpenAI", _call_openai))
     if GEMINI_API_KEY:
-        all_apis.append(("Gemini",  _call_gemini))
+        candidates.append(("Gemini", _call_gemini))
     with _api_lock:
-        available = [(n, fn) for n, fn in all_apis
-                     if now < _disabled_until.get(n, float("inf"))]
-        if not available:
-            return []
-        start = _rr_index % len(available)
-        _rr_index += 1
-    return available[start:] + available[:start]
+        return [(n, fn) for n, fn in candidates
+                if now >= _disabled_until.get(n, 0)]
 
 
 # ─── 평가 진입점 ─────────────────────────────────────────────────────────────
@@ -201,7 +189,7 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
                 return result
             if rate_limited:
                 _adaptive.on_rate_limit()
-                _disable_api(name)
+                _on_api_fail(name)
                 remaining = _get_apis()
                 next_name = remaining[0][0] if remaining else "규칙 기반"
                 print(f"  [rate limit] {name} → {next_name} 으로 전환")
