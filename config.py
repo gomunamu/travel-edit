@@ -16,7 +16,30 @@ MIN_SEGMENT_DURATION = 2           # 이 시간(초) 미만은 자동 버림
 PURE_LANDSCAPE_THRESHOLD = 10      # 음성 없이 이 시간(초) 이상이면 AI가 컷 평가
 
 # === 출력 설정 ===
-OUTPUT_RESOLUTION = (720, 480)   # 출력 해상도
+# None = 원본 영상 최고 해상도 기준 자동 선택 (4K / 1440p / FHD / 720p 중 가장 가까운 상위 계단)
+# .env / 환경변수: OUTPUT_RESOLUTION=auto | 4k | 1440p | fhd | 720p | 3840x2160
+_res_env = os.environ.get("OUTPUT_RESOLUTION", "").strip().lower()
+_RES_PRESETS = {
+    "4k":    (3840, 2160),
+    "1440p": (2560, 1440),
+    "fhd":   (1920, 1080),
+    "1080p": (1920, 1080),
+    "720p":  (1280, 720),
+}
+if _res_env and _res_env not in ("", "auto"):
+    if _res_env in _RES_PRESETS:
+        OUTPUT_RESOLUTION = _RES_PRESETS[_res_env]
+    elif "x" in _res_env:
+        try:
+            _rw, _rh = _res_env.split("x")
+            OUTPUT_RESOLUTION = (int(_rw), int(_rh))
+        except ValueError:
+            OUTPUT_RESOLUTION = None
+    else:
+        OUTPUT_RESOLUTION = None
+else:
+    OUTPUT_RESOLUTION = None  # auto
+
 OUTPUT_FPS = 30
 CRF = 9                           # 화질 (낮을수록 좋음, 18 = 거의 무손실)
 FFMPEG_PRESET = "fast"

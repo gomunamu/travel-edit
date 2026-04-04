@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Tuple, Optional
 
-from config import OUTPUT_RESOLUTION, CRF, FFMPEG_PRESET, RENDER_WORKERS
+from config import CRF, FFMPEG_PRESET, RENDER_WORKERS
 
 try:
     from tqdm import tqdm as _tqdm_cls
@@ -16,9 +16,39 @@ except ImportError:
     HAS_TQDM = False
 
 
+# 해상도 자동 선택 계단 (긴 변 기준, 내림차순)
+_RES_TIERS: List[Tuple[int, int]] = [
+    (3840, 2160),  # 4K UHD
+    (2560, 1440),  # 1440p QHD
+    (1920, 1080),  # 1080p FHD
+    (1280,  720),  # 720p HD
+]
+
+
 def get_day_resolution(clips: List[dict]) -> Tuple[int, int]:
-    """config.OUTPUT_RESOLUTION 반환 (설정값 우선)"""
-    return OUTPUT_RESOLUTION
+    """
+    OUTPUT_RESOLUTION이 None(auto)이면 클립 중 가장 긴 변을 기준으로
+    4K / 1440p / FHD / 720p 중 업스케일이 없는 최고 계단을 선택.
+    고정값이 설정돼 있으면 그대로 사용.
+    """
+    from config import OUTPUT_RESOLUTION
+    if OUTPUT_RESOLUTION is not None:
+        return OUTPUT_RESOLUTION
+
+    max_long = 0
+    for clip in clips:
+        w = clip.get("display_width",  clip.get("raw_width",  0))
+        h = clip.get("display_height", clip.get("raw_height", 0))
+        max_long = max(max_long, w, h)
+
+    if max_long == 0:
+        return (1920, 1080)
+
+    for tier_w, tier_h in _RES_TIERS:
+        if max_long >= tier_w:
+            return (tier_w, tier_h)
+
+    return (1280, 720)  # 최소
 
 
 def build_scale_filter(is_portrait: bool, out_w: int, out_h: int) -> str:

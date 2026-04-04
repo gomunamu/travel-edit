@@ -471,11 +471,15 @@ def run(input_folder: str, output_folder: str):
     cache = Cache(str(cache_dir))
 
     from config import OUTPUT_RESOLUTION
+    if OUTPUT_RESOLUTION is None:
+        res_str = "자동 (원본 최고 해상도 기준)"
+    else:
+        res_str = f"{OUTPUT_RESOLUTION[0]}x{OUTPUT_RESOLUTION[1]}"
     print(f"\n{'='*60}")
     print(f"  여행 영상 자동 편집기")
     print(f"  입력: {input_folder}")
     print(f"  출력: {output_folder}")
-    print(f"  해상도: {OUTPUT_RESOLUTION[0]}x{OUTPUT_RESOLUTION[1]}")
+    print(f"  해상도: {res_str}")
     print(f"{'='*60}\n")
 
     # 1. 스캔

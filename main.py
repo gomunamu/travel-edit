@@ -108,11 +108,17 @@ def main():
         "--no-stt-refine", action="store_true",
         help="STT 결과 LLM 정제 비활성화 (기본: 활성화)"
     )
+    parser.add_argument(
+        "--resolution", default=None,
+        choices=["auto", "4k", "1440p", "fhd", "720p"],
+        help="출력 해상도 (기본: auto=원본 최고 해상도 기준 4K/1440p/FHD/720p 자동 선택)"
+    )
 
     args = parser.parse_args()
 
     # 설정 오버라이드
     import config
+    _RES_MAP = {"4k": (3840,2160), "1440p": (2560,1440), "fhd": (1920,1080), "720p": (1280,720)}
     if args.no_ai:
         config.ANTHROPIC_API_KEY = ""
         print("[알림] AI 평가 비활성화 - 규칙 기반으로 처리합니다.")
@@ -130,6 +136,8 @@ def main():
         config.SUBTITLE_LANG = "off"
     if args.no_stt_refine:
         config.STT_REFINE = False
+    if args.resolution:
+        config.OUTPUT_RESOLUTION = None if args.resolution == "auto" else _RES_MAP[args.resolution]
 
     # 의존성 확인
     check_dependencies()
@@ -156,6 +164,12 @@ def main():
         mode_label  = {"overlay": "영상 번인", "srt": "별도 SRT 파일"}.get(config.SUBTITLE_MODE, config.SUBTITLE_MODE)
         refine_label = "ON" if config.STT_REFINE else "OFF"
         refine_src   = "CLI 인수" if args.no_stt_refine else ".env / 기본값"
+        res_src      = "CLI 인수" if args.resolution else ".env / 기본값"
+        if config.OUTPUT_RESOLUTION is None:
+            res_label = "자동 (원본 최고 해상도 → 4K/1440p/FHD/720p)"
+        else:
+            res_label = f"{config.OUTPUT_RESOLUTION[0]}x{config.OUTPUT_RESOLUTION[1]}"
+        print(f"[해상도]   {res_label}  ({res_src})")
         print(f"[음성인식] Whisper 모델: {config.WHISPER_MODEL}  ({whisper_src})")
         print(f"           디바이스: {config.WHISPER_DEVICE.upper()}  |  연산타입: {config.WHISPER_COMPUTE_TYPE}")
         print(f"[자막]     언어: {lang_label} ({lang_src})  |  방식: {mode_label} ({mode_src})")
