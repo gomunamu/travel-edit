@@ -562,7 +562,7 @@ def run(input_folder: str, output_folder: str):
         print_clip_preview(segments, transcripts)
 
     # 5. AI 평가
-    print(f"\n[5/6] AI 클립 평가... (adaptive: 초기 {_eval_adaptive.current_limit}→최대 50 동시)")
+    print(f"\n[5/6] AI 클립 평가...")
     evaluations = evaluate_all(segments, transcripts, cache)
     _token_tracker.print_current("5단계 AI 평가 후")
 

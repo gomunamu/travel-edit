@@ -97,7 +97,6 @@ class AdaptiveConcurrency:
                 self._limit += 1
                 self._consecutive_ok = 0
                 self._cv.notify_all()
-                print(f"  [adaptive] 동시 요청 ↑ {self._limit}")
 
     def on_rate_limit(self):
         with self._cv:
@@ -105,7 +104,6 @@ class AdaptiveConcurrency:
             new = max(self._min, self._limit // 2)
             if new < self._limit:
                 self._limit = new
-                print(f"  [adaptive] rate limit → 동시 요청 ↓ {self._limit}")
 
     @property
     def current_limit(self) -> int:
