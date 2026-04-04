@@ -14,6 +14,56 @@ def _fmt_time(seconds: float) -> str:
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
+def _split_segment_to_lines(seg: dict, max_display_chars: int = 30) -> List[dict]:
+    """
+    word 타임스탬프를 이용해 긴 세그먼트를 1줄에 맞는 짧은 청크로 분할.
+    한글/CJK 문자는 2칸, 나머지는 1칸으로 계산.
+    word 정보가 없으면 원본 그대로 반환.
+    """
+    words = seg.get("words", [])
+    if not words:
+        return [seg]
+
+    def _display_len(text: str) -> int:
+        return sum(2 if ord(c) > 0x7F else 1 for c in text)
+
+    result = []
+    chunk_words: list = []
+    chunk_len = 0
+
+    for w in words:
+        word_text = w.get("word", "")
+        wlen = _display_len(word_text.strip())
+        if chunk_words and chunk_len + wlen > max_display_chars:
+            chunk_text = "".join(cw["word"] for cw in chunk_words).strip()
+            if chunk_text:
+                result.append({
+                    **seg,
+                    "start": chunk_words[0]["start"],
+                    "end": chunk_words[-1]["end"],
+                    "text": chunk_text,
+                    "words": chunk_words,
+                })
+            chunk_words = [w]
+            chunk_len = wlen
+        else:
+            chunk_words.append(w)
+            chunk_len += wlen
+
+    if chunk_words:
+        chunk_text = "".join(cw["word"] for cw in chunk_words).strip()
+        if chunk_text:
+            result.append({
+                **seg,
+                "start": chunk_words[0]["start"],
+                "end": chunk_words[-1]["end"],
+                "text": chunk_text,
+                "words": chunk_words,
+            })
+
+    return result if result else [seg]
+
+
 def make_subtitle_ass(
     segments: List[dict],
     output_path: str,
@@ -31,11 +81,15 @@ def make_subtitle_ass(
     # 출력 해상도에 비례해서 폰트/여백 스케일 (기준: 1080p)
     scaled_font = max(1, int(font_size * H / 1080))
     scaled_margin_v = max(1, int(margin_v * H / 1080))
-    speech_segs = [
+    raw_segs = [
         s for s in segments
         if s.get("text", "").strip()
         and s.get("no_speech_prob", 1.0) < 0.5
     ]
+    # 각 세그먼트를 1줄짜리 청크로 분할
+    speech_segs = []
+    for s in raw_segs:
+        speech_segs.extend(_split_segment_to_lines(s))
 
     header = f"""[Script Info]
 ScriptType: v4.00+
