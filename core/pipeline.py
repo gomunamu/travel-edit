@@ -25,6 +25,7 @@ from core.refiner import refine_transcript
 from core.evaluator import evaluate_clip
 from core.geocoder import coords_to_str
 from core.subtitle import make_subtitle_ass, make_subtitle_srt, make_location_ass
+from core.evaluator import _adaptive as _eval_adaptive
 from core.renderer import get_day_resolution, render_day_onepass, is_valid_video
 
 try:
@@ -354,7 +355,7 @@ def evaluate_all(
             evaluations[h] = result
         return h, result
 
-    with ThreadPoolExecutor(max_workers=CLAUDE_MAX_CONCURRENT) as ex:
+    with ThreadPoolExecutor(max_workers=50) as ex:
         futures = [ex.submit(_eval_one, seg) for seg in need_eval]
         for future in _tqdm(as_completed(futures), total=len(futures), desc="  AI 평가"):
             future.result()
@@ -561,7 +562,7 @@ def run(input_folder: str, output_folder: str):
         print_clip_preview(segments, transcripts)
 
     # 5. AI 평가
-    print("\n[5/6] AI 클립 평가...")
+    print(f"\n[5/6] AI 클립 평가... (adaptive: 초기 {_eval_adaptive.current_limit}→최대 50 동시)")
     evaluations = evaluate_all(segments, transcripts, cache)
     _token_tracker.print_current("5단계 AI 평가 후")
 
