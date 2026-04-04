@@ -5,7 +5,7 @@ import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 from config import OUTPUT_RESOLUTION, CRF, FFMPEG_PRESET, RENDER_WORKERS
 
@@ -121,9 +121,11 @@ def render_day_onepass(
         Path(temp_paths[0]).rename(output_path)
         return True
 
-    if pbar is None:
-        print(f"  클립 병합 중 ({n}개)...")
-    ok = _concat_clips(temp_paths, output_path)
+    total_sec = sum(
+        max(0.1, clip.get("trim_end", clip["duration"]) - clip.get("trim_start", 0.0))
+        for clip in clips_info
+    )
+    ok = _concat_clips(temp_paths, output_path, total_sec)
     for p in temp_paths:
         Path(p).unlink(missing_ok=True)
     return ok
@@ -180,24 +182,79 @@ def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int]) -> bool
     return True
 
 
-def _concat_clips(clip_paths: List[str], output_path: str) -> bool:
-    """인코딩된 클립들을 stream copy로 이어 붙인다."""
+def _concat_clips(clip_paths: List[str], output_path: str, total_sec: float = 0.0) -> bool:
+    """인코딩된 클립들을 stream copy로 이어 붙인다. ffmpeg progress로 진행률 표시."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
                                     delete=False, encoding="utf-8") as f:
         concat_file = f.name
         for p in clip_paths:
             escaped = os.path.abspath(p).replace("\\", "/").replace("'", "\\'")
             f.write(f"file '{escaped}'\n")
+
+    r_fd, w_fd = os.pipe()
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0", "-i", concat_file,
+        "-c", "copy", "-movflags", "+faststart",
+        "-progress", f"pipe:{w_fd}", "-nostats",
+        output_path,
+    ]
+
+    total_rounded = max(1, round(total_sec))
+    if HAS_TQDM:
+        pbar: Optional[object] = _tqdm_cls(
+            total=total_rounded,
+            desc="  병합",
+            unit="s",
+            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n:.0f}/{total}s [{elapsed}<{remaining}]",
+        )
+    else:
+        pbar = None
+        print(f"  병합 중 ({len(clip_paths)}개 클립, {total_sec:.0f}초)...")
+
+    last_sec = [0.0]
+
+    def _watch():
+        try:
+            with os.fdopen(r_fd, "r") as pipe:
+                for line in pipe:
+                    if not line.startswith("out_time="):
+                        continue
+                    ts = line.split("=", 1)[1].strip()
+                    if ts in ("N/A", "00:00:00.000000", ""):
+                        continue
+                    try:
+                        h, m, s = ts.split(":")
+                        out_sec = int(h) * 3600 + int(m) * 60 + float(s)
+                    except (ValueError, IndexError):
+                        continue
+                    if pbar:
+                        delta = out_sec - last_sec[0]
+                        if delta > 0:
+                            pbar.update(delta)  # type: ignore[attr-defined]
+                            last_sec[0] = out_sec
+        except OSError:
+            pass
+
+    watcher = threading.Thread(target=_watch, daemon=True)
+    watcher.start()
+
     try:
-        cmd = [
-            "ffmpeg", "-y",
-            "-f", "concat", "-safe", "0", "-i", concat_file,
-            "-c", "copy", "-movflags", "+faststart",
-            output_path,
-        ]
-        result = subprocess.run(cmd, capture_output=True)
-        if result.returncode != 0:
-            err = result.stderr[-400:].decode(errors="replace")
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, pass_fds=(w_fd,)
+        )
+        os.close(w_fd)
+        proc.wait()
+        watcher.join(timeout=5)
+
+        if pbar:
+            remaining = total_rounded - round(last_sec[0])
+            if remaining > 0:
+                pbar.update(remaining)  # type: ignore[attr-defined]
+            pbar.close()  # type: ignore[attr-defined]
+
+        if proc.returncode != 0:
+            err = (proc.stderr.read() if proc.stderr else b"")[-400:].decode(errors="replace")
             print(f"  [오류] 클립 병합 실패: {err}")
             return False
         return True
