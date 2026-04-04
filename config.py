@@ -75,7 +75,7 @@ SUBTITLE_MODE = os.environ.get("SUBTITLE_MODE", "overlay") # overlay|srt
 # === Claude AI 설정 ===
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = "claude-sonnet-4-6"
-CLAUDE_MAX_CONCURRENT = 5          # 동시 API 호출 수
+CLAUDE_MAX_CONCURRENT = int(os.environ.get("EVAL_WORKERS", "5"))  # 동시 AI 평가 수
 
 # === STT 정제 설정 ===
 # Whisper 결과를 LLM으로 한 번 더 정제 (외부 소음/한국어 오인식 보정)

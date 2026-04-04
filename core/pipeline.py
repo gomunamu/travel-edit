@@ -344,13 +344,11 @@ def evaluate_all(
         print(f"  AI 평가 필요: {len(need_eval)}개 (캐시 {len(evaluations)}개 재사용)")
 
     lock = threading.Lock()
-    semaphore = threading.Semaphore(CLAUDE_MAX_CONCURRENT)
 
     def _eval_one(seg):
         h = seg["clip_hash"]
         transcript = transcripts.get(h, {"segments": [], "has_speech": False, "total_speech_sec": 0})
-        with semaphore:
-            result = evaluate_clip(seg, transcript)
+        result = evaluate_clip(seg, transcript)
         cache.save(h, "eval", result)
         with lock:
             evaluations[h] = result
