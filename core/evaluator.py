@@ -236,13 +236,17 @@ def _call_openai(prompt: str, duration: float) -> Tuple[Optional[dict], bool]:
 
 def _call_gemini(prompt: str, duration: float) -> Tuple[Optional[dict], bool]:
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel(
-            model_name=GEMINI_MODEL,
-            system_instruction=SYSTEM_PROMPT,
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                max_output_tokens=512,
+            ),
         )
-        response = model.generate_content(prompt)
         meta = response.usage_metadata
         _tracker.record("Gemini", GEMINI_MODEL,
                         meta.prompt_token_count, meta.candidates_token_count)
