@@ -113,6 +113,10 @@ def main():
         choices=["auto", "4k", "1440p", "fhd", "720p"],
         help="출력 해상도 (기본: auto=원본 최고 해상도 기준 4K/1440p/FHD/720p 자동 선택)"
     )
+    parser.add_argument(
+        "--archive-dir", default=None, metavar="DIR",
+        help="하루치 완료 시 mp4(+srt)를 이 폴더로 이동 (NVMe 용량 절약용)"
+    )
 
     args = parser.parse_args()
 
@@ -138,6 +142,8 @@ def main():
         config.STT_REFINE = False
     if args.resolution:
         config.OUTPUT_RESOLUTION = None if args.resolution == "auto" else _RES_MAP[args.resolution]
+    if args.archive_dir:
+        config.ARCHIVE_DIR = args.archive_dir
 
     # 의존성 확인
     check_dependencies()

@@ -86,7 +86,12 @@ STT_REFINE_MODEL = os.environ.get("STT_REFINE_MODEL", "claude-haiku-4-5-20251001
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL   = os.environ.get("OPENAI_MODEL",   "gpt-4o-mini")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL   = os.environ.get("GEMINI_MODEL",   "gemini-2.0-flash")
+GEMINI_MODEL   = os.environ.get("GEMINI_MODEL",   "gemini-2.5-flash")
+
+# === 아카이브 설정 ===
+# 하루치 렌더링 완료 후 mp4(+srt)를 이 폴더로 이동 (None = 이동 안 함)
+# .env: ARCHIVE_DIR=/mnt/nas/travel_archive
+ARCHIVE_DIR = os.environ.get("ARCHIVE_DIR", "") or None
 
 # === 병렬 처리 설정 ===
 METADATA_WORKERS = 32          # NAS 환경: I/O 대기가 대부분 → 많을수록 유리

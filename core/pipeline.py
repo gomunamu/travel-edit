@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 from datetime import datetime, timezone
@@ -587,7 +588,7 @@ def run(input_folder: str, output_folder: str):
         if Path(output_path).exists():
             size_mb = Path(output_path).stat().st_size / 1_048_576
             print(f"  → 이미 존재: {output_path} (건너뜀, {size_mb:.1f} MB)")
-            file_report.append({"name": Path(output_path).name, "elapsed": 0.0, "size_mb": size_mb, "skipped": True})
+            file_report.append({"name": Path(output_path).name, "path": output_path, "elapsed": 0.0, "size_mb": size_mb, "skipped": True})
             continue
 
         day_start = time.time()
@@ -597,9 +598,22 @@ def run(input_folder: str, output_folder: str):
         )
         if ok:
             elapsed = time.time() - day_start
-            size_mb = Path(output_path).stat().st_size / 1_048_576
-            file_report.append({"name": Path(output_path).name, "elapsed": elapsed, "size_mb": size_mb, "skipped": False})
-            print(f"  ✓ 완료: {output_path} ({size_mb:.1f} MB, {elapsed:.0f}초)")
+            final_path = output_path
+            archive_dir = getattr(_config, "ARCHIVE_DIR", None)
+            if archive_dir:
+                arch_dir = Path(archive_dir)
+                arch_dir.mkdir(parents=True, exist_ok=True)
+                dest = arch_dir / Path(output_path).name
+                shutil.move(output_path, dest)
+                final_path = str(dest)
+                # SRT가 있으면 같이 이동
+                srt_src = Path(output_path.replace(".mp4", ".srt"))
+                if srt_src.exists():
+                    shutil.move(str(srt_src), str(arch_dir / srt_src.name))
+                print(f"  → 아카이브 이동: {dest}")
+            size_mb = Path(final_path).stat().st_size / 1_048_576
+            file_report.append({"name": Path(final_path).name, "path": final_path, "elapsed": elapsed, "size_mb": size_mb, "skipped": False})
+            print(f"  ✓ 완료: {final_path} ({size_mb:.1f} MB, {elapsed:.0f}초)")
 
     total_elapsed = time.time() - run_start
     total_size_mb  = sum(r["size_mb"] for r in file_report)
