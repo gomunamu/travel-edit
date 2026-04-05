@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 from collections import defaultdict
@@ -523,6 +524,9 @@ def run(input_folder: str, output_folder: str):
     print(f"  해상도: {res_str}")
     print(f"{'='*60}\n")
 
+    run_start = time.time()
+    file_report: List[dict] = []   # {"name", "elapsed", "size_mb"}
+
     # 1. 스캔
     print("[1/6] 비디오 파일 스캔...")
     videos = scan_videos(input_folder)
@@ -581,18 +585,50 @@ def run(input_folder: str, output_folder: str):
         output_path = str(out_dir / f"travel_{day_key}.mp4")
 
         if Path(output_path).exists():
-            print(f"  → 이미 존재: {output_path} (건너뜀)")
+            size_mb = Path(output_path).stat().st_size / 1_048_576
+            print(f"  → 이미 존재: {output_path} (건너뜀, {size_mb:.1f} MB)")
+            file_report.append({"name": Path(output_path).name, "elapsed": 0.0, "size_mb": size_mb, "skipped": True})
             continue
 
+        day_start = time.time()
         ok = render_day(
             day_key, day_segs, transcripts, evaluations,
             cache, output_path
         )
         if ok:
+            elapsed = time.time() - day_start
             size_mb = Path(output_path).stat().st_size / 1_048_576
-            print(f"  ✓ 완료: {output_path} ({size_mb:.1f} MB)")
+            file_report.append({"name": Path(output_path).name, "elapsed": elapsed, "size_mb": size_mb, "skipped": False})
+            print(f"  ✓ 완료: {output_path} ({size_mb:.1f} MB, {elapsed:.0f}초)")
+
+    total_elapsed = time.time() - run_start
+    total_size_mb  = sum(r["size_mb"] for r in file_report)
 
     print(f"\n{'='*60}")
     print(f"  편집 완료! 출력 폴더: {output_folder}")
     print(f"{'='*60}")
+
+    if file_report:
+        print(f"\n{'─'*60}")
+        print(f"  {'파일명':<35} {'작업시간':>8}  {'용량':>8}")
+        print(f"{'─'*60}")
+        for r in file_report:
+            if r["skipped"]:
+                time_str = "(재사용)"
+            else:
+                m, s = divmod(int(r["elapsed"]), 60)
+                time_str = f"{m}분 {s:02d}초" if m else f"{s}초"
+            print(f"  {r['name']:<35} {time_str:>8}  {r['size_mb']:>6.1f} MB")
+        print(f"{'─'*60}")
+        tm, ts = divmod(int(total_elapsed), 60)
+        th, tm2 = divmod(tm, 60)
+        if th:
+            total_time_str = f"{th}시간 {tm2}분 {ts:02d}초"
+        elif tm:
+            total_time_str = f"{tm}분 {ts:02d}초"
+        else:
+            total_time_str = f"{ts}초"
+        print(f"  {'합계':<35} {total_time_str:>8}  {total_size_mb:>6.1f} MB")
+        print(f"{'─'*60}")
+
     _token_tracker.print_summary()
