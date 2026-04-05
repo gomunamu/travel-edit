@@ -6,7 +6,7 @@ import shutil
 import time
 from pathlib import Path
 from datetime import datetime, timezone
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional
 import threading
@@ -357,10 +357,34 @@ def evaluate_all(
             evaluations[h] = result
         return h, result
 
-    with ThreadPoolExecutor(max_workers=50) as ex:
-        futures = [ex.submit(_eval_one, seg) for seg in need_eval]
-        for future in _tqdm(as_completed(futures), total=len(futures), desc="  AI 평가"):
-            future.result()
+    # 소스 파일 단위로 그룹화해서 평가
+    # 파일 사이에 API 상태를 리셋 → 이전 파일에서 rate limit으로 비활성화된 API를
+    # 다음 파일에서 다시 시도 (처리 시간이 길어 rate limit이 회복된다고 가정)
+    from core.evaluator import reset_api_state
+
+    file_groups: dict = OrderedDict()
+    for seg in need_eval:
+        fname = seg.get("filename", "")
+        file_groups.setdefault(fname, []).append(seg)
+
+    total = len(need_eval)
+    if HAS_TQDM:
+        from tqdm import tqdm as _tqdm_cls
+        pbar = _tqdm_cls(total=total, desc="  AI 평가")
+    else:
+        pbar = None
+
+    for fname, file_segs in file_groups.items():
+        reset_api_state()
+        with ThreadPoolExecutor(max_workers=50) as ex:
+            futures = [ex.submit(_eval_one, seg) for seg in file_segs]
+            for future in as_completed(futures):
+                future.result()
+                if pbar:
+                    pbar.update(1)
+
+    if pbar:
+        pbar.close()
 
     return evaluations
 

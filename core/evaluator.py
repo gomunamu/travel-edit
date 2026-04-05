@@ -113,13 +113,24 @@ class AdaptiveConcurrency:
 _adaptive = AdaptiveConcurrency(initial=3, min_w=1, max_w=50, increase_after=5)
 
 
-# ─── API 가용성 관리 (쿨다운 3회 실패 시 세션 영구 비활성화) ───────────────
+# ─── API 가용성 관리 (쿨다운 3회 실패 시 파일 내 영구 비활성화) ───────────────
 # 우선순위: Claude → OpenAI → Gemini (순차 강등)
+# 파일 단위로 리셋: 다음 소스 파일 처리 시 API 상태 초기화 (rate limit 회복 가정)
 _api_lock       = threading.Lock()
 _disabled_until: dict = {}   # {"Claude": timestamp or inf}
 _fail_count:     dict = {}   # {"Claude": int}
 _COOLDOWN        = 5.0       # 실패 후 재시도 대기(초)
-_MAX_FAILS       = 3         # 이 횟수 도달 시 세션 내 영구 비활성화
+_MAX_FAILS       = 3         # 이 횟수 도달 시 현재 파일 내 비활성화
+
+
+def reset_api_state():
+    """파일 경계에서 API 비활성화 상태를 초기화한다.
+    한 파일 처리 중 rate limit으로 비활성화된 API도
+    다음 파일에서는 다시 시도한다 (rate limit 회복 가정).
+    """
+    with _api_lock:
+        _disabled_until.clear()
+        _fail_count.clear()
 
 
 def _on_api_fail(name: str):
