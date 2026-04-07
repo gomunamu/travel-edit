@@ -184,7 +184,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     # Alignment 3 = 우하단, MarginR이 오른쪽 여백, MarginV가 하단 여백
     fade_ms = int(fade_duration * 1000)
-    text = location_name.replace(",", "\\,")
+    text = location_name
     event = (
         f"Dialogue: 0,{_fmt_time(0)},{_fmt_time(end_time)},Loc,,0,0,0,,"
         f"{{\\fad({fade_ms},{fade_ms})}}{text}\n"
