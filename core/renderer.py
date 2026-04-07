@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Tuple, Optional
 
-from config import CRF, FFMPEG_PRESET, RENDER_WORKERS
+from config import CRF, FFMPEG_PRESET, RENDER_WORKERS, VIDEO_CODEC
 
 try:
     from tqdm import tqdm as _tqdm_cls
@@ -179,9 +179,11 @@ def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int]) -> bool
     if sub_path and Path(sub_path).exists():
         vf += f",ass='{_esc_path(sub_path)}'"
 
+    codec_extra = ["-tag:v", "hvc1"] if VIDEO_CODEC == "libx265" else []
     encode_args = [
         "-vf", vf,
-        "-c:v", "libx264", "-crf", str(CRF), "-preset", FFMPEG_PRESET,
+        "-c:v", VIDEO_CODEC, "-crf", str(CRF), "-preset", FFMPEG_PRESET,
+        *codec_extra,
         "-r", "30", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
         "-movflags", "+faststart",
