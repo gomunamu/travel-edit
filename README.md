@@ -14,7 +14,7 @@
 - **자동 해상도** — 원본 클립 최고 해상도 기준 자동 선택 (4K / 1440p / FHD / 720p)
 - **날짜별 출력** — 촬영 날짜 기준으로 영상 자동 분류 및 합본 생성
 - **병렬 렌더링** — 멀티코어 병렬 렌더링으로 빠른 처리
-- **AI 폴백** — Claude → OpenAI → Gemini 순서로 rate limit 시 자동 전환
+- **AI 폴백** — Claude → OpenAI → Gemini 순서로 rate limit 시 자동 전환, 소스 파일 단위로 API 상태 리셋
 - **토큰 사용량 추적** — Anthropic / OpenAI / Gemini 각각 토큰·비용 집계
 
 ## 요구사항
@@ -98,6 +98,9 @@ STT_REFINE_MODEL=claude-haiku-4-5-20251001
 
 # 출력 설정
 OUTPUT_RESOLUTION=auto         # auto | 4k | 1440p | fhd | 720p | 1920x1080
+CRF=18                         # 화질/용량 균형 (낮을수록 화질↑ 용량↑, 18=시각적 무손실)
+VIDEO_CODEC=h264               # h264 (호환성 최대) | h265 (동일 화질에서 용량 약 50% 절감)
+FFMPEG_PRESET=medium           # ultrafast | fast | medium | slow (느릴수록 압축률↑)
 RENDER_WORKERS=0               # 0 = cpu_count // 2 자동
 ```
 
@@ -136,7 +139,9 @@ output/
 |------|--------|------|
 | `OUTPUT_RESOLUTION` | auto | 출력 해상도 (원본 최고 해상도 자동 선택) |
 | `OUTPUT_FPS` | 30 | 출력 프레임레이트 |
-| `CRF` | 9 | 화질 (낮을수록 좋음) |
+| `CRF` | 18 | 화질/용량 균형 (H.264 기준: 18=시각적 무손실, 낮을수록 용량↑) |
+| `VIDEO_CODEC` | h264 | 인코딩 코덱 (`h264` / `h265`) — H.265는 동일 화질에서 용량 약 50% 절감 |
+| `FFMPEG_PRESET` | medium | 인코딩 속도/압축률 트레이드오프 (`ultrafast` ~ `veryslow`) |
 | `WHISPER_MODEL` | large-v3 | 음성 인식 모델 |
 | `SUBTITLE_LANG` | auto | 자막 언어 |
 | `SUBTITLE_MODE` | overlay | 자막 방식 |
