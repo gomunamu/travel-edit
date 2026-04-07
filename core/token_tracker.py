@@ -93,10 +93,10 @@ class TokenTracker:
             print(f"  │{l}")
         print(f"  └─ 합계 예상 비용: ~${total_cost:.4f} USD\n")
 
-    def print_summary(self):
+    def format_summary(self) -> str:
         snap = self._snapshot()
         if not snap:
-            return
+            return ""
         total_in = total_out = total_cost = 0
         lines = []
         for provider, models in sorted(snap.items()):
@@ -116,18 +116,22 @@ class TokenTracker:
             total_cost += p_cost
 
         width = 70
-        print(f"\n  {'═'*width}")
-        print(f"  {'토큰 사용량 최종 요약':^{width}}")
-        print(f"  {'═'*width}")
-        for l in lines:
-            print(l)
-        print(f"  {'─'*width}")
-        print(
-            f"    {'합계':<46}"
-            f"in={total_in:>8,}  out={total_out:>7,}"
-        )
-        print(f"    예상 비용: ~${total_cost:.4f} USD  (참고용 추정치)")
-        print(f"  {'═'*width}\n")
+        parts = [
+            f"\n  {'═'*width}",
+            f"  {'토큰 사용량 최종 요약':^{width}}",
+            f"  {'═'*width}",
+            *lines,
+            f"  {'─'*width}",
+            f"    {'합계':<46}in={total_in:>8,}  out={total_out:>7,}",
+            f"    예상 비용: ~${total_cost:.4f} USD  (참고용 추정치)",
+            f"  {'═'*width}",
+        ]
+        return "\n".join(parts) + "\n"
+
+    def print_summary(self):
+        text = self.format_summary()
+        if text:
+            print(text)
 
 
 # 전역 싱글턴

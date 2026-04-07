@@ -642,22 +642,30 @@ def run(input_folder: str, output_folder: str):
     total_elapsed = time.time() - run_start
     total_size_mb  = sum(r["size_mb"] for r in file_report)
 
-    print(f"\n{'='*60}")
-    print(f"  편집 완료! 출력 폴더: {output_folder}")
-    print(f"{'='*60}")
+    # ── 요약 문자열 빌드 ──────────────────────────────────────────────────────
+    lines = []
+    lines.append(f"\n{'='*60}")
+    lines.append(f"  편집 완료! 출력 폴더: {output_folder}")
+    lines.append(f"{'='*60}")
 
     if file_report:
-        print(f"\n{'─'*60}")
-        print(f"  {'파일명':<35} {'작업시간':>8}  {'용량':>8}")
-        print(f"{'─'*60}")
+        lines.append(f"\n{'─'*60}")
+        lines.append(f"  {'파일명':<35} {'작업시간':>10}  {'용량':>10}")
+        lines.append(f"{'─'*60}")
         for r in file_report:
             if r["skipped"]:
                 time_str = "(재사용)"
             else:
                 m, s = divmod(int(r["elapsed"]), 60)
-                time_str = f"{m}분 {s:02d}초" if m else f"{s}초"
-            print(f"  {r['name']:<35} {time_str:>8}  {r['size_mb']:>6.1f} MB")
-        print(f"{'─'*60}")
+                h2, m2 = divmod(m, 60)
+                if h2:
+                    time_str = f"{h2}시간 {m2}분 {s:02d}초"
+                elif m:
+                    time_str = f"{m}분 {s:02d}초"
+                else:
+                    time_str = f"{s}초"
+            lines.append(f"  {r['name']:<35} {time_str:>10}  {r['size_mb']:>8.1f} MB")
+        lines.append(f"{'─'*60}")
         tm, ts = divmod(int(total_elapsed), 60)
         th, tm2 = divmod(tm, 60)
         if th:
@@ -666,7 +674,21 @@ def run(input_folder: str, output_folder: str):
             total_time_str = f"{tm}분 {ts:02d}초"
         else:
             total_time_str = f"{ts}초"
-        print(f"  {'합계':<35} {total_time_str:>8}  {total_size_mb:>6.1f} MB")
-        print(f"{'─'*60}")
+        lines.append(f"  {'합계':<35} {total_time_str:>10}  {total_size_mb:>8.1f} MB")
+        lines.append(f"{'─'*60}")
 
-    _token_tracker.print_summary()
+    token_text = _token_tracker.format_summary()
+    if token_text:
+        lines.append(token_text)
+
+    summary = "\n".join(lines)
+    print(summary)
+
+    # ── txt 파일로 저장 ───────────────────────────────────────────────────────
+    run_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_path = Path(output_folder) / f"travel_report_{run_time}.txt"
+    try:
+        report_path.write_text(summary, encoding="utf-8")
+        print(f"  리포트 저장: {report_path}")
+    except OSError as e:
+        print(f"  [경고] 리포트 저장 실패: {e}")
