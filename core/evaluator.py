@@ -124,13 +124,29 @@ _MAX_FAILS       = 3         # 이 횟수 도달 시 현재 파일 내 비활성
 
 
 def reset_api_state():
-    """파일 경계에서 API 비활성화 상태를 초기화한다.
-    한 파일 처리 중 rate limit으로 비활성화된 API도
-    다음 파일에서는 다시 시도한다 (rate limit 회복 가정).
+    """파일 경계에서 API 상태를 조건부 리셋한다.
+
+    - 활성 API가 하나라도 남아있으면 리셋하지 않는다.
+      (예: Claude 실패 후 OpenAI가 작동 중이면 Claude를 재시도하지 않음)
+    - 모든 API가 비활성화된 경우에만 리셋한다.
+      (rate limit이 회복됐을 가능성이 있으므로 다음 파일에서 재시도)
     """
+    import time
+    now = time.time()
+    configured = []
+    if ANTHROPIC_API_KEY:
+        configured.append("Claude")
+    if OPENAI_API_KEY:
+        configured.append("OpenAI")
+    if GEMINI_API_KEY:
+        configured.append("Gemini")
+
     with _api_lock:
-        _disabled_until.clear()
-        _fail_count.clear()
+        has_active = any(now >= _disabled_until.get(n, 0) for n in configured)
+        if not has_active:
+            _disabled_until.clear()
+            _fail_count.clear()
+            print("  [API 리셋] 모든 API 비활성화 상태 → 다음 파일에서 재시도")
 
 
 def _on_api_fail(name: str):
