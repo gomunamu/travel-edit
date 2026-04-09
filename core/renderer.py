@@ -70,10 +70,21 @@ def build_scale_filter(is_portrait: bool, out_w: int, out_h: int) -> str:
         )
 
 
-def _worker_count() -> int:
+def _worker_count(out_res: Tuple[int, int] = (1920, 1080)) -> int:
     if RENDER_WORKERS is not None:
         return max(1, RENDER_WORKERS)
-    return max(1, (os.cpu_count() or 2) // 2)
+    cpu = os.cpu_count() or 2
+    long_side = max(out_res)
+    # 고해상도일수록 클립당 메모리/CPU 부하가 크므로 워커 수를 제한
+    if long_side >= 3840:   # 4K: 클립당 ~2GB 메모리
+        limit = max(1, cpu // 8)
+    elif long_side >= 2560: # 1440p
+        limit = max(1, cpu // 6)
+    elif long_side >= 1920: # 1080p
+        limit = max(1, cpu // 4)
+    else:                   # 720p 이하
+        limit = max(1, cpu // 2)
+    return limit
 
 
 def render_day_onepass(
@@ -89,7 +100,7 @@ def render_day_onepass(
     최종 병합은 재인코딩 없는 stream copy라 빠르다.
     """
     n = len(clips_info)
-    workers = _worker_count()
+    workers = _worker_count(out_res)
     out_dir = Path(output_path).parent
     stem = Path(output_path).stem
 
@@ -208,7 +219,11 @@ def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int]) -> bool
 
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode != 0:
-        err = result.stderr[-600:].decode(errors="replace")
+        raw = result.stderr.decode(errors="replace")
+        # ffmpeg 에러는 stderr 앞부분에, 진행률은 뒷부분에 있으므로 양쪽 모두 표시
+        head = raw[:800]
+        tail = raw[-400:] if len(raw) > 800 else ""
+        err = head + ("\n...\n" + tail if tail else "")
         print(f"\n  [오류] 클립 인코딩 실패 ({Path(clip['filepath']).name}):\n{err}")
         return False
     return True
