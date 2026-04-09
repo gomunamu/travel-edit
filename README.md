@@ -32,32 +32,104 @@ brew install ffmpeg            # macOS
 pip install -r requirements.txt
 ```
 
-### Python 가상환경 (권장)
+### 설치 스크립트
 
-CUDA / PyTorch 관련 패키지 충돌 방지를 위해 venv 사용을 권장합니다.
+```bash
+./install.sh
+```
+
+`install.sh`가 아래 모든 항목을 자동으로 처리합니다.  
+옵션:
+
+```bash
+./install.sh                     # 기본 (PyTorch CUDA 12.8 wheel)
+./install.sh --torch-cuda=cu124  # CUDA 12.4 wheel 사용
+./install.sh --cpu-only          # GPU 없는 환경
+./install.sh --skip-torch        # PyTorch 이미 설치된 경우 건너뜀
+```
+
+### CUDA 아키텍처
+
+이 앱은 CUDA를 **두 레이어**로 사용합니다.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  시스템 레이어 (apt)                                             │
+│    CUDA Toolkit 12.x  ──→  ffmpeg NVENC/NVDEC (GPU 인코딩·디코딩)│
+│    NVIDIA Driver       ──→  nvidia-smi, GPU 관리                │
+├─────────────────────────────────────────────────────────────────┤
+│  venv 레이어 (pip)                                               │
+│    PyTorch +cu12x      ──→  nvidia-cudnn-cu12 내장 (cuDNN 자동) │
+│    ctranslate2         ──→  자체 CUDA 라이브러리 내장            │
+│    faster-whisper      ──→  ctranslate2 사용 (음성 인식)         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**핵심**: pip wheel (`torch+cu128` 등)은 cuDNN을 내장하므로 **시스템에 cuDNN을 별도 설치할 필요가 없습니다.**  
+시스템 CUDA Toolkit은 ffmpeg NVENC/NVDEC 전용입니다.
+
+#### 시스템 CUDA Toolkit 설치 (ffmpeg NVENC/NVDEC용)
+
+```bash
+# 1) NVIDIA apt 저장소 등록
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt-get update
+
+# 2) CUDA Toolkit 설치 (드라이버 버전에 맞게 선택)
+sudo apt-get install -y cuda-toolkit-12-4
+```
+
+드라이버별 지원 CUDA 최대 버전:
+
+| NVIDIA 드라이버 | 지원 CUDA 최대 |
+|-----------------|---------------|
+| 535.x | 12.2 |
+| 550.x | 12.4 |
+| 560.x | 12.6 |
+| 570.x | 12.8 |
+
+Ubuntu 22.04 기본 ffmpeg 패키지는 NVENC/NVDEC를 포함하므로 별도 ffmpeg 빌드가 불필요합니다.
+
+#### venv PyTorch 설치 (Python CUDA용)
+
+```bash
+# CUDA 12.8 (드라이버 570.x 이상)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+# CUDA 12.4 (드라이버 550.x 이상)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+# CPU 전용
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
+
+faster-whisper는 내부적으로 **CTranslate2** 엔진을 사용합니다 (PyTorch 직접 사용 안 함).  
+CTranslate2도 자체 CUDA 라이브러리를 내장하므로 `pip install faster-whisper` 만으로 GPU 가속이 동작합니다.
+
+#### LD_LIBRARY_PATH 정리 (권장)
+
+여러 버전의 CUDA를 설치한 경우 `~/.bashrc`에서 경로를 통일하세요.
+
+```bash
+export CUDA_HOME=/usr/local/cuda
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+```
+
+구버전 CUDA 경로(`/usr/local/cuda-11.3/lib64` 등)가 남아 있으면 충돌이 발생할 수 있습니다.
+
+### Python 가상환경
+
+CUDA / PyTorch 관련 패키지 충돌 방지를 위해 venv 사용을 필수로 권장합니다.
 
 ```bash
 python3 -m venv ~/venvs/torch
 source ~/venvs/torch/bin/activate
+pip install torch --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 ```
 
 이후 실행 시에도 항상 같은 venv를 활성화한 상태에서 실행합니다.
-
-### Whisper 의존성 (faster-whisper)
-
-faster-whisper는 **PyTorch 기반** 패키지입니다 (TensorFlow 아님).  
-내부적으로 CTranslate2 엔진을 사용하며, CUDA + cuDNN이 필요합니다.
-
-| CUDA 버전 | cuDNN 버전 | faster-whisper |
-|-----------|-----------|----------------|
-| CUDA 12.x | cuDNN 9.x | ≥ 1.0.0 (권장) |
-| CUDA 11.x | cuDNN 8.x | 0.x 계열 |
-
-```bash
-# CUDA 12 + cuDNN 9 기준 설치 예시 (Ubuntu)
-pip install faster-whisper>=1.0.0
-```
 
 ### Gemini API 패키지
 
