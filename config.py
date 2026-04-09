@@ -71,7 +71,7 @@ if _res_env and _res_env not in ("", "auto"):
 else:
     OUTPUT_RESOLUTION = None  # auto
 
-OUTPUT_FPS = 30
+OUTPUT_FPS = 30  # 미사용: 출력 FPS는 클립 원본 FPS를 기준으로 자동 결정 (모두 60fps+ 이면 60, 아니면 30)
 # CRF: H.264 기준 18 = 시각적 무손실, 9 = 거의 완전 무손실(용량 매우 큼)
 #      H.265 기준 22 ≈ H.264 CRF 18과 동등 화질, 용량은 H.264의 약 절반
 # .env: CRF=18

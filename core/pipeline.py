@@ -28,7 +28,7 @@ from core.evaluator import evaluate_clip
 from core.geocoder import coords_to_str
 from core.subtitle import make_subtitle_ass, make_subtitle_srt, make_location_ass
 from core.evaluator import _adaptive as _eval_adaptive
-from core.renderer import get_day_resolution, render_day_onepass, is_valid_video
+from core.renderer import get_day_resolution, get_day_fps, render_day_onepass, is_valid_video
 
 try:
     from tqdm import tqdm
@@ -408,6 +408,7 @@ def render_day(
     filter_complex 로 한 번에 트림·스케일·자막·병합 (중간 파일 없음).
     """
     out_res = get_day_resolution(day_segments)
+    out_fps = get_day_fps(day_segments)
 
     def _make_clip(seg, ev):
         clip = dict(seg)
@@ -508,7 +509,7 @@ def render_day(
         else:
             clip["show_location"] = None
 
-    print(f"  출력 해상도: {out_res[0]}x{out_res[1]}, {len(selected)}개 클립")
+    print(f"  출력 해상도: {out_res[0]}x{out_res[1]}, {out_fps}fps, {len(selected)}개 클립")
 
     # ASS 파일 생성 (자막·장소) — 캐시 활용
     clips_info = []
@@ -554,7 +555,7 @@ def render_day(
         clips_info.append({**clip, "sub_path": sub_path, "loc_path": loc_path})
 
     print(f"  렌더링+병합 → {Path(output_path).name}")
-    ok = render_day_onepass(clips_info, output_path, out_res)
+    ok = render_day_onepass(clips_info, output_path, out_res, out_fps)
 
     # SRT 모드: 병합 성공 후 타임라인 맞춰 단일 SRT 파일 생성
     if ok and _config.SUBTITLE_MODE == "srt":

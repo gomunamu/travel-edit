@@ -91,6 +91,26 @@ _RES_TIERS: List[Tuple[int, int]] = [
 ]
 
 
+_STANDARD_FPS = [24, 25, 30, 48, 50, 60, 90, 120]
+
+
+def get_day_fps(clips: List[dict]) -> int:
+    """
+    클립 전체의 FPS를 검사해 출력 FPS를 결정한다.
+    - 모든 클립이 30fps 초과이면 그 중 최솟값을 가장 가까운 표준 FPS로 내림
+    - 한 클립이라도 30fps 이하이면 30 반환
+    """
+    fpss = [clip.get("fps", 30.0) for clip in clips if clip.get("fps")]
+    if not fpss:
+        return 30
+    min_fps = min(fpss)
+    if min_fps <= 30.0:
+        return 30
+    # 30fps 초과: 표준 값 중 min_fps 이하 최댓값 선택
+    candidates = [f for f in _STANDARD_FPS if f <= min_fps]
+    return max(candidates) if candidates else 30
+
+
 def get_day_resolution(clips: List[dict]) -> Tuple[int, int]:
     """
     OUTPUT_RESOLUTION이 None(auto)이면 클립 중 가장 긴 변을 기준으로
@@ -162,6 +182,7 @@ def render_day_onepass(
     clips_info: List[dict],
     output_path: str,
     out_res: Tuple[int, int],
+    out_fps: int = 30,
 ) -> bool:
     """
     클립마다 독립적인 ffmpeg 프로세스로 병렬 인코딩한 뒤 stream copy로 병합.
@@ -199,7 +220,7 @@ def render_day_onepass(
             if pbar:
                 pbar.set_postfix_str(" | ".join(active.values()), refresh=True)
 
-        ok = _render_clip(clip, temp_paths[i], out_res)
+        ok = _render_clip(clip, temp_paths[i], out_res, out_fps)
 
         with active_lock:
             active.pop(i, None)
@@ -243,7 +264,7 @@ def render_day_onepass(
     return ok
 
 
-def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int]) -> bool:
+def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int], out_fps: int = 30) -> bool:
     """클립 1개를 ffmpeg로 인코딩해 output_path에 저장."""
     out_w, out_h = out_res
     src_start = clip.get("_src_start", 0.0)
@@ -264,13 +285,13 @@ def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int]) -> bool
     encode_args = [
         "-vf", vf,
         *_build_encode_args(codec_extra_tag=True),
-        "-r", "30", "-pix_fmt", "yuv420p",
+        "-r", str(out_fps), "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
         "-movflags", "+faststart",
         output_path,
     ]
 
-    return _run_encode(clip, output_path, abs_start, abs_dur, encode_args, use_gpu=_use_nvenc())
+    return _run_encode(clip, output_path, abs_start, abs_dur, encode_args, use_gpu=_use_nvenc(), out_fps=out_fps)
 
 
 def _build_cmd(clip: dict, abs_start: float, abs_dur: float,
@@ -291,7 +312,7 @@ def _build_cmd(clip: dict, abs_start: float, abs_dur: float,
 
 def _run_encode(clip: dict, output_path: str,
                 abs_start: float, abs_dur: float,
-                encode_args: list, use_gpu: bool) -> bool:
+                encode_args: list, use_gpu: bool, out_fps: int = 30) -> bool:
     """ffmpeg 실행. use_gpu=True 시 NVENC 세마포어 획득 후 실행."""
     sem = _nvenc_semaphore if use_gpu else None
     if sem:
@@ -316,12 +337,12 @@ def _run_encode(clip: dict, output_path: str,
                            if not a.startswith("-") and i > 4)
             tail_args = encode_args[out_idx:]  # output_path만 포함
             cpu_full = ["-vf", vf_val] + cpu_encode_args + [
-                "-r", "30", "-pix_fmt", "yuv420p",
+                "-r", str(out_fps), "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
                 "-movflags", "+faststart",
             ] + tail_args
             return _run_encode(clip, output_path, abs_start, abs_dur,
-                               cpu_full, use_gpu=False)
+                               cpu_full, use_gpu=False, out_fps=out_fps)
         head = raw[:800]
         tail = raw[-400:] if len(raw) > 800 else ""
         err = head + ("\n...\n" + tail if tail else "")
