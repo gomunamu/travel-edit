@@ -352,12 +352,24 @@ def _parse_response(text: str, duration: float) -> Optional[dict]:
         return None
     try:
         r = json.loads(match.group())
+        def _safe_int(val, default: int) -> int:
+            try:
+                return int(val) if val is not None else default
+            except (ValueError, TypeError):
+                return default
+
+        def _safe_float(val, default: float) -> float:
+            try:
+                return float(val) if val is not None else default
+            except (ValueError, TypeError):
+                return default
+
         raw_score = r.get("score", {})
         if isinstance(raw_score, dict):
-            visual = max(0, min(25, int(raw_score.get("visual", 12))))
-            speech = max(0, min(25, int(raw_score.get("speech", 12))))
-            scene  = max(0, min(25, int(raw_score.get("scene",  12))))
-            flow   = max(0, min(25, int(raw_score.get("flow",   12))))
+            visual = max(0, min(25, _safe_int(raw_score.get("visual"), 12)))
+            speech = max(0, min(25, _safe_int(raw_score.get("speech"), 12)))
+            scene  = max(0, min(25, _safe_int(raw_score.get("scene"),  12)))
+            flow   = max(0, min(25, _safe_int(raw_score.get("flow"),   12)))
         else:
             visual = speech = scene = flow = 12
         score = {
@@ -366,10 +378,10 @@ def _parse_response(text: str, duration: float) -> Optional[dict]:
             "total": visual + speech + scene + flow,
         }
         return {
-            "decision":   r.get("decision", "keep"),
-            "reason":     r.get("reason", ""),
-            "keep_start": float(r.get("keep_start", 0)),
-            "keep_end":   float(r.get("keep_end", duration)),
+            "decision":   r.get("decision") or "keep",
+            "reason":     r.get("reason") or "",
+            "keep_start": _safe_float(r.get("keep_start"), 0.0),
+            "keep_end":   _safe_float(r.get("keep_end"),   duration),
             "score":      score,
         }
     except (json.JSONDecodeError, ValueError):
