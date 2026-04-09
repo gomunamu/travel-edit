@@ -87,6 +87,52 @@ def _parse_creation_time(tags: dict) -> Optional[datetime]:
     return None
 
 
+# 날짜 패턴: YYYY-MM-DD, YYYYMMDD, YYYY_MM_DD
+_DATE_PATTERNS = [
+    re.compile(r'(\d{4})[_\-](\d{2})[_\-](\d{2})'),  # 2024-07-15 / 2024_07_15
+    re.compile(r'(\d{4})(\d{2})(\d{2})'),              # 20240715
+]
+
+
+def _parse_date_from_text(text: str) -> Optional[datetime]:
+    """문자열(파일명·경로)에서 날짜를 파싱한다."""
+    for pat in _DATE_PATTERNS:
+        m = pat.search(text)
+        if m:
+            try:
+                y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if 2000 <= y <= 2099 and 1 <= mo <= 12 and 1 <= d <= 31:
+                    return datetime(y, mo, d, tzinfo=timezone.utc)
+            except ValueError:
+                continue
+    return None
+
+
+def _fallback_creation_time(filepath: str) -> datetime:
+    """
+    메타데이터에 날짜가 없을 때 3단계 fallback.
+    1) 상위 디렉토리 경로명에서 날짜 파싱 (부모 → 조부모 순)
+    2) 파일명에서 날짜 파싱
+    3) 파일 mtime
+    """
+    p = Path(filepath)
+
+    # 1) 디렉토리 경로 (하위 → 상위 순)
+    for part in reversed(p.parts[:-1]):
+        dt = _parse_date_from_text(part)
+        if dt:
+            return dt
+
+    # 2) 파일명
+    dt = _parse_date_from_text(p.stem)
+    if dt:
+        return dt
+
+    # 3) mtime
+    mtime = p.stat().st_mtime
+    return datetime.fromtimestamp(mtime, tz=timezone.utc)
+
+
 def _parse_gps(tags: dict) -> Optional[tuple]:
     """ISO 6709 형식 또는 개별 GPS 태그에서 좌표 추출"""
     # Apple QuickTime / ISO 6709: "+37.5665+126.9780/"
@@ -193,6 +239,11 @@ def get_video_info(filepath: str) -> Optional[dict]:
     all_tags.update(video_stream.get("tags", {}))
 
     creation_time = _parse_creation_time(all_tags)
+    # 메타데이터에 날짜 없으면 경로/파일명/mtime으로 fallback
+    date_from_meta = creation_time is not None
+    if creation_time is None:
+        creation_time = _fallback_creation_time(filepath)
+
     gps = _parse_gps(all_tags)
 
     duration = float(fmt.get("duration", 0))
@@ -216,7 +267,8 @@ def get_video_info(filepath: str) -> Optional[dict]:
         "total_bitrate_kbps": total_bitrate,
         "video_bitrate_kbps": video_bitrate,
         "audio_bitrate_kbps": audio_bitrate if audio_bitrate else 192,
-        "creation_time": creation_time.isoformat() if creation_time else None,
-        "day_key": creation_time.astimezone().strftime("%Y-%m-%d") if creation_time else "unknown",
+        "creation_time": creation_time.isoformat(),
+        "creation_time_source": "metadata" if date_from_meta else "path/filename/mtime",
+        "day_key": creation_time.astimezone().strftime("%Y-%m-%d"),
         "gps": list(gps) if gps else None,
     }

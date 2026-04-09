@@ -84,17 +84,22 @@ def extract_all_metadata(video_files: List[str], cache: Cache) -> List[dict]:
             if r:
                 results.append(r)
 
-    # 촬영 시간 순 정렬
+    # 촬영 시간 순 정렬 (creation_time은 항상 존재 — fallback 보장)
     def sort_key(c):
-        ct = c.get("creation_time")
-        if ct:
-            try:
-                return datetime.fromisoformat(ct)
-            except Exception:
-                pass
-        return datetime.min.replace(tzinfo=timezone.utc)
+        try:
+            return datetime.fromisoformat(c["creation_time"])
+        except Exception:
+            return datetime.min.replace(tzinfo=timezone.utc)
 
     results.sort(key=sort_key)
+
+    # 메타데이터 날짜 없이 fallback 사용한 파일 안내
+    fallback_files = [r for r in results if r.get("creation_time_source") != "metadata"]
+    if fallback_files:
+        print(f"  [알림] {len(fallback_files)}개 파일은 날짜 메타데이터 없음 → 경로/파일명/mtime 으로 날짜 추정")
+        for r in fallback_files:
+            print(f"    {r['filename']}  →  {r['day_key']} ({r['creation_time_source']})")
+
     return results
 
 
