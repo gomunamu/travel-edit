@@ -1,5 +1,6 @@
 """LLM 기반 STT 결과 정제 (한국어 오인식·외부 소음 보정)"""
 import json
+import re
 from typing import Optional
 
 from core.token_tracker import tracker as _tracker
@@ -12,6 +13,8 @@ Whisper로 인식된 한국어 텍스트에는 다음과 같은 오류가 자주
 - 외부 소음으로 인한 단어 삽입·누락
 - 붙여쓰기/띄어쓰기 오류
 - 문맥과 맞지 않는 단어 대체
+- Whisper hallucination: 단어·구절이 수십 회 반복 (예: "살금 살금 살금 살금...")
+  → 반복은 자연스러운 횟수(1~2회)로 줄이거나 완전히 제거하세요
 
 주어진 JSON 배열의 각 텍스트를 자연스러운 한국어로 교정하여 반환하세요.
 
@@ -24,6 +27,31 @@ Whisper로 인식된 한국어 텍스트에는 다음과 같은 오류가 자주
 """
 
 
+def remove_repetitions(text: str, threshold: int = 4) -> str:
+    """
+    Whisper hallucination 제거: 단어·구절이 threshold회 이상 연속 반복되면 1회로 축소.
+
+    "살금 살금 살금 살금 살금..." → "살금"
+    "레스토랑 레스토랑 레스토랑..." → "레스토랑"
+
+    LLM 전에 적용해 토큰 낭비와 불안정한 응답을 방지.
+    """
+    changed = True
+    while changed:
+        changed = False
+        # n-gram 길이 4→1 순서로 (긴 패턴 우선)
+        for n in range(4, 0, -1):
+            if n == 1:
+                pat = r'(\S+)(?:\s+\1){' + str(threshold - 1) + r',}'
+            else:
+                pat = r'(' + r'\s+'.join([r'\S+'] * n) + r')(?:\s+\1){' + str(threshold - 1) + r',}'
+            new = re.sub(pat, r'\1', text)
+            if new != text:
+                text = new
+                changed = True
+    return text.strip()
+
+
 def refine_transcript(transcript: dict, api_key: str, model: str) -> dict:
     """
     transcript의 segments 텍스트를 LLM으로 정제한다.
@@ -33,7 +61,7 @@ def refine_transcript(transcript: dict, api_key: str, model: str) -> dict:
         return transcript
 
     segments = transcript["segments"]
-    texts = [s.get("text", "").strip() for s in segments]
+    texts = [remove_repetitions(s.get("text", "").strip()) for s in segments]
 
     if not any(texts):
         return transcript

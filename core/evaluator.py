@@ -13,6 +13,7 @@ from config import (
     EDIT_STYLE, STYLE_MAX_LANDSCAPE, STYLE_DISCARD_SILENT,
 )
 from core.token_tracker import tracker as _tracker
+from core.refiner import remove_repetitions
 
 SYSTEM_PROMPT = """당신은 10년 경력의 여행 브이로그 편집자이자 방송국 PD입니다.
 여행 동영상의 각 클립을 분석하고, 최종 편집본에 포함할지 결정합니다.
@@ -381,7 +382,7 @@ def _build_transcript_text(transcript: dict) -> str:
     if not segs:
         return "(음성 없음)"
     return "\n".join(
-        f"[{s['start']:.1f}s~{s['end']:.1f}s] {s['text']}" for s in segs
+        f"[{s['start']:.1f}s~{s['end']:.1f}s] {remove_repetitions(s['text'])}" for s in segs
     )
 
 
