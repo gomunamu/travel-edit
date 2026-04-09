@@ -94,11 +94,11 @@ def extract_all_metadata(video_files: List[str], cache: Cache) -> List[dict]:
     results.sort(key=sort_key)
 
     # 메타데이터 날짜 없이 fallback 사용한 파일 안내
-    fallback_files = [r for r in results if r.get("creation_time_source") != "metadata"]
+    fallback_files = [r for r in results if r.get("creation_time_source", "metadata") != "metadata"]
     if fallback_files:
         print(f"  [알림] {len(fallback_files)}개 파일은 날짜 메타데이터 없음 → 경로/파일명/mtime 으로 날짜 추정")
         for r in fallback_files:
-            print(f"    {r['filename']}  →  {r['day_key']} ({r['creation_time_source']})")
+            print(f"    {r['filename']}  →  {r['day_key']} ({r.get('creation_time_source', 'path/filename/mtime')})")
 
     return results
 
