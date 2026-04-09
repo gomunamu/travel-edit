@@ -55,8 +55,9 @@ def _load_one_model():
 
 _MAX_AUTO_WORKERS = 8  # auto 모드(n=0)일 때 시도할 최대 인스턴스 수
 # 추론 시 idle VRAM 대비 추가 사용량 비율 (KV cache, activation 등)
-# large-v3 batch_size=4 기준 약 60~100% 추가 사용
-_INFERENCE_OVERHEAD = 0.70   # idle VRAM의 70%를 추론 헤드룸으로 예약
+# large-v3 batch_size=4 기준 약 30~70% 추가 사용 (GPU/워크로드마다 다름)
+# .env: WHISPER_VRAM_OVERHEAD=0.40  (낮출수록 더 많은 인스턴스 로드, OOM 위험 증가)
+_INFERENCE_OVERHEAD = float(os.environ.get("WHISPER_VRAM_OVERHEAD", "0.40"))
 _VRAM_FLOOR_MB = 1500        # 로드 후 최소 유지해야 할 절대 여유 VRAM (MB)
 
 
