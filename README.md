@@ -189,23 +189,35 @@ python main.py ./videos ./output --resolution fhd
 
 ### 편집 스타일 (`--style`)
 
-하루 영상 전체의 편집 기준을 한 번에 설정합니다.
+하루 영상 전체의 편집 기준을 한 번에 설정합니다.  
+스타일에 따라 AI에게 주어지는 **페르소나와 평가 기준이 완전히 달라집니다.**
 
-| 스타일 | 설명 |
-|--------|------|
-| `balanced` | 음성과 풍경을 균형 있게 선별 **(기본값)** |
-| `voice` | 음성·대화가 있는 클립 우선. 무음 풍경은 즉시 제거 |
-| `vlog` | 말하는 장면 중심이지만 짧은 장면 전환 컷(5초 이내)은 살림 |
-| `scene-short` | 풍경 포함, 최대 10초로 트림 |
-| `scene-long` | 풍경 우선, 최대 30초까지 허용 |
-| `highlight` | 최고 점수 클립만 엄선 (소셜 미디어 하이라이트용) |
+| 스타일 | AI 페르소나 | 무음 풍경 처리 | 최대 유지 |
+|--------|------------|--------------|----------|
+| `balanced` | 여행 브이로그 PD | 길면 트림, 짧으면 유지 | 10초 |
+| `voice` | 여행 브이로그 PD | **전부 제거** | — |
+| `vlog` | 여행 브이로그 PD | 5초 이내 전환 컷은 유지 | 5초 |
+| `scene-short` | 여행 영상 편집자 | 핵심 구간만 트림해 유지 | 10초 |
+| `scene-long` | **여행 다큐멘터리 감독** | **기본적으로 유지** (화질 불량만 제거) | 30초 |
+| `highlight` | 여행 브이로그 PD | 고득점 클립만 엄선 | 8초 |
 
 ```bash
-python main.py ./videos ./output --style vlog
-python main.py ./videos ./output --style highlight
+python main.py ./videos ./output --style scene-long   # 풍경·자연 위주
+python main.py ./videos ./output --style vlog         # 말하는 장면 위주
+python main.py ./videos ./output --style highlight    # 하이라이트 릴
 ```
 
-> `voice`와 `vlog`의 차이: `voice`는 무음 클립을 모두 제거하고, `vlog`는 5초 이내 무음 전환 컷은 살립니다.
+**`scene-long` / `scene-short` 주의사항**
+
+`scene-long`과 `scene-short`는 AI 페르소나 자체가 다릅니다.
+
+- 다른 스타일: *"시청자가 지루하지 않도록 재미있는 장면만 선별하라"* (브이로그 PD)
+- `scene-long`: *"무음 풍경은 결함이 아니라 핵심 콘텐츠. 버림은 심한 흔들림·초점 불량에만 한정"* (다큐 감독)
+- `scene-short`: *"음성 없음은 감점 사유가 아님. 핵심 구간만 남겨 트림"* (여행 편집자)
+
+같은 무음 풍경 클립이라도 `scene-long`에서는 기본 keep/trim, 다른 스타일에서는 discard 후보가 됩니다.
+
+> **`voice` vs `vlog`**: `voice`는 무음 클립을 전부 제거합니다. `vlog`는 5초 이내 무음 전환 컷은 편집 흐름상 살립니다.
 
 ### 최소 분량 보장 (`--min-day-duration`)
 
