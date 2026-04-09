@@ -39,7 +39,7 @@ _STYLE_TABLE = {
     "scene-short":      (10,        10,       False),
     "scene-long":       (30,        30,       False),
     "highlight":        ( 5,         8,       False),
-    "vlog":             ( 5,         5,       True ),
+    "vlog":             ( 5,         5,       False),  # voice와 달리 5초 이내 전환 컷 허용
 }
 _st = _STYLE_TABLE.get(EDIT_STYLE, _STYLE_TABLE["balanced"])
 PURE_LANDSCAPE_THRESHOLD = _st[0]   # AI 평가 트리거 임계값
