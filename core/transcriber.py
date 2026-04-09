@@ -13,9 +13,6 @@ _pool: Optional[queue.Queue] = None
 _pool_lock = threading.Lock()
 _pool_total = 0          # 체크아웃 중 포함 전체 살아있는 인스턴스 수
 _pool_total_lock = threading.Lock()
-_shrink_lock = threading.Lock()  # OOM 시 한 번에 1개만 폐기되도록 직렬화
-_last_shrink_time = 0.0
-_SHRINK_COOLDOWN = 20.0  # 폐기 후 최소 대기 시간(초) — 연속 과잉 폐기 방지
 
 # distil-whisper 단축명 → HuggingFace 모델 ID 매핑
 _DISTIL_ALIASES = {
@@ -57,15 +54,37 @@ def _load_one_model():
 
 
 _MAX_AUTO_WORKERS = 8  # auto 모드(n=0)일 때 시도할 최대 인스턴스 수
+# 추론 시 idle VRAM 대비 추가 사용량 비율 (KV cache, activation 등)
+# large-v3 batch_size=4 기준 약 60~100% 추가 사용
+_INFERENCE_OVERHEAD = 0.70   # idle VRAM의 70%를 추론 헤드룸으로 예약
+_VRAM_FLOOR_MB = 1500        # 로드 후 최소 유지해야 할 절대 여유 VRAM (MB)
+
+
+def _get_vram_free_mb() -> Optional[int]:
+    """현재 GPU 여유 VRAM (MB). 측정 불가 시 None."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return int(result.stdout.strip().split("\n")[0].strip())
+    except Exception:
+        pass
+    return None
 
 
 def init_model_pool(n: int = 0):
     """
     Whisper 모델 인스턴스를 풀에 적재.
-    n=0 (auto): VRAM이 허용하는 한도까지 최대한 로드 (OOM 직전까지).
+    n=0 (auto): VRAM 여유를 추론 헤드룸까지 고려해 인스턴스 수 결정.
     n>0: 지정한 수만큼 시도, VRAM 부족 시 자동 축소.
+
+    idle 상태 VRAM만 측정하면 실제 추론 시 OOM이 발생한다.
+    각 인스턴스 로드 후 소비한 VRAM의 (1 + _INFERENCE_OVERHEAD)배를
+    헤드룸으로 예약해 동시 추론 시 OOM을 방지한다.
     """
-    global _pool
+    global _pool, _pool_total
     with _pool_lock:
         if _pool is not None:
             return
@@ -75,24 +94,45 @@ def init_model_pool(n: int = 0):
         print(f"  Whisper 모델 로드 중: {WHISPER_MODEL} × {label}")
         _pool = queue.Queue()
         loaded = 0
+        vram_before = _get_vram_free_mb()  # 최초 여유 VRAM
+
         for i in range(target):
+            # 로드 전 여유 VRAM 측정
+            free_before = _get_vram_free_mb()
             try:
                 model, device = _load_one_model()
-                _pool.put(model)
-                loaded += 1
-                print(f"  ✓ 인스턴스 {loaded} 로드 완료 ({device.upper()})")
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
                     if loaded == 0:
                         raise RuntimeError(
                             "Whisper 모델을 하나도 로드할 수 없습니다. VRAM을 확인하세요."
                         )
-                    print(f"  VRAM 한계 도달 → {loaded}개 인스턴스로 확정")
+                    print(f"  VRAM 한계 도달 (로드 실패) → {loaded}개 인스턴스로 확정")
                     break
                 raise
+
+            _pool.put(model)
+            loaded += 1
+            free_after = _get_vram_free_mb()
+            print(f"  ✓ 인스턴스 {loaded} 로드 완료 ({device.upper()})", end="")
+
+            # VRAM 여유 체크 (auto 모드에서만)
+            if auto and free_after is not None and free_before is not None:
+                model_vram = max(0, free_before - free_after)  # 이번 인스턴스가 사용한 VRAM
+                # 추론 헤드룸: 이번 인스턴스 VRAM × overhead 비율
+                inference_headroom = int(model_vram * _INFERENCE_OVERHEAD)
+                # 다음 인스턴스를 로드해도 헤드룸이 확보되는지 확인
+                needed = model_vram + inference_headroom  # 다음 로드 + 현재 인스턴스 헤드룸
+                floor = max(_VRAM_FLOOR_MB, inference_headroom)
+                print(f"  (여유 {free_after}MB, 모델 {model_vram}MB, 헤드룸 {inference_headroom}MB)")
+                if free_after < needed + floor:
+                    print(f"  VRAM 헤드룸 부족 → {loaded}개 인스턴스로 확정 (추론 중 OOM 방지)")
+                    break
+            else:
+                print()
+
         if loaded == 0:
             raise RuntimeError("Whisper 모델을 하나도 로드할 수 없습니다. VRAM을 확인하세요.")
-        global _pool_total
         _pool_total = loaded
         print(f"  → TRANSCRIBE_WORKERS={loaded} 확정")
 
@@ -149,15 +189,19 @@ def transcribe(video_path: str, start: float = 0.0, duration: float = None,
                force_lang: str = None) -> dict:
     """
     음성 인식 실행, TranscriptDict 반환.
-    CUDA OOM 발생 시 해당 인스턴스를 폐기(풀에 반납 안 함)하고
+    CUDA OOM 발생 시 해당 인스턴스를 즉시 폐기(풀에 반납하지 않음)하고
     다음 가용 인스턴스로 재시도. 인스턴스가 모두 소진되면 예외 발생.
     """
     import time
-    global _pool_total, _last_shrink_time
+    global _pool_total
     pool = _get_pool()
 
     while True:
-        model = pool.get()  # 가용 인스턴스 대기
+        try:
+            model = pool.get(timeout=120)  # 최대 2분 대기 (다른 워커 추론 완료 대기)
+        except queue.Empty:
+            raise RuntimeError("CUDA OOM: 인스턴스가 모두 소진됨. VRAM 부족.")
+
         try:
             result = _transcribe_with(model, video_path, start=start,
                                       duration=duration, force_lang=force_lang)
@@ -167,29 +211,16 @@ def transcribe(video_path: str, start: float = 0.0, duration: float = None,
             if not _is_cuda_oom(e):
                 pool.put(model)
                 raise
-            # OOM: 이 모델은 일단 풀에 반납
-            pool.put(model)
-            # 동시에 여러 워커가 OOM 나도 딱 1개만 폐기, 쿨다운 내엔 폐기 안 함
-            if _shrink_lock.acquire(blocking=False):
-                try:
-                    now = time.time()
-                    if now - _last_shrink_time >= _SHRINK_COOLDOWN:
-                        try:
-                            victim = pool.get_nowait()  # 유휴 인스턴스 1개 꺼내 폐기
-                            with _pool_total_lock:
-                                _pool_total -= 1
-                                remaining_total = _pool_total
-                            _last_shrink_time = now
-                            print(f"  [VRAM] OOM → 인스턴스 1개 폐기, 전체 {remaining_total}개 남음")
-                            del victim
-                            if remaining_total == 0:
-                                raise RuntimeError("CUDA OOM: 인스턴스가 모두 소진됨. VRAM 부족.")
-                        except queue.Empty:
-                            pass  # 모두 체크아웃 중 → 폐기 건너뜀
-                    # else: 쿨다운 중 → 폐기 없이 재시도만
-                finally:
-                    _shrink_lock.release()
-            time.sleep(3)  # 다른 워커들이 현재 추론을 마칠 시간
+            # OOM: 이 인스턴스를 즉시 폐기 (풀에 반납하지 않음)
+            # → 같은 OOM 모델이 다른 워커에 재배분되는 것을 방지
+            with _pool_total_lock:
+                _pool_total -= 1
+                remaining = _pool_total
+            print(f"  [VRAM] OOM → 인스턴스 1개 폐기, 전체 {remaining}개 남음")
+            del model
+            if remaining == 0:
+                raise RuntimeError("CUDA OOM: 인스턴스가 모두 소진됨. VRAM 부족.")
+            time.sleep(2)  # 다른 워커들이 추론을 마칠 시간 확보 후 재시도
 
 
 # Whisper 언어 코드 매핑 (config SUBTITLE_LANG → Whisper language code)
