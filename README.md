@@ -192,24 +192,34 @@ output/
 | `MAX_SEGMENT_DURATION` | 30초 | 클립 최대 길이 |
 | `MIN_SEGMENT_DURATION` | 2초 | 클립 최소 길이 |
 | `TRANSCRIBE_WORKERS` | 0(자동) | 음성 인식 병렬 수 (VRAM에 따라 자동 제한) |
-| `RENDER_WORKERS` | auto | 렌더링 병렬 수 (해상도·GPU 여부에 따라 자동 결정) |
+| `RENDER_WORKERS` | auto | 렌더링 병렬 수 (GPU 모드: cpu//2, CPU 4K: cpu//8) |
 | `METADATA_WORKERS` | 32 | 메타데이터 추출 병렬 수 |
 
-### NVENC (GPU 하드웨어 인코딩)
+### NVENC + NVDEC (GPU 하드웨어 인코딩·디코딩)
 
-NVIDIA GPU가 있으면 자동으로 감지해 하드웨어 인코딩을 사용합니다.  
-CPU 인코딩(libx264) 대비 4K 기준 **10~30배 빠른** 인코딩 속도를 제공합니다.
+NVIDIA GPU가 있으면 자동으로 감지해 하드웨어 인코딩·디코딩을 모두 사용합니다.  
+CPU 인코딩(libx264) 대비 4K 기준 **10~30배 빠른** 처리 속도를 제공합니다.
 
-| 인코더 | 4K 속도 | CRF 호환 | 비고 |
-|--------|---------|----------|------|
-| libx264 (CPU) | 5~15 fps | CRF 사용 | 느리지만 호환성 최대 |
-| h264_nvenc (GPU) | 150~200 fps | `-cq` 사용 | CUDA 설치 필요 |
-| hevc_nvenc (GPU) | 120~180 fps | `-cq` 사용 | `VIDEO_CODEC=h265`일 때 |
+| 구간 | CPU 모드 | GPU 모드 (NVENC+NVDEC) |
+|------|---------|----------------------|
+| 디코딩 | CPU (무거움) | NVDEC 전용 하드웨어 |
+| 필터 (scale/pad/자막) | CPU | CPU (경량) |
+| 인코딩 | CPU libx264/libx265 | NVENC 전용 하드웨어 |
+| 4K 처리 속도 | 5~15 fps | 150~200 fps |
+| 병렬 워커 수 (28코어 기준) | 3개 (4K) | 14개 |
 
-NVENC가 활성화되면 `RENDER_WORKERS`는 `cpu_count // 4`로 자동 조정됩니다.  
-(CPU 인코딩 시 4K는 `cpu_count // 8`로 제한하여 메모리 포화 방지)
+GPU 모드에서는 디코딩·인코딩이 모두 GPU 전용 하드웨어(NVDEC/NVENC)에서 처리되어  
+CPU는 scale/pad/자막 합성 등 가벼운 필터 작업만 담당합니다.
 
-> **참고**: NVENC 최소 해상도는 145×145px입니다. 그 이하 해상도는 CPU 인코딩으로 자동 전환됩니다.
+**워커 수 자동 결정 기준:**
+
+| 모드 | 4K | 1440p | 1080p | 720p |
+|------|----|-------|-------|------|
+| GPU (NVENC+NVDEC) | cpu//2 | cpu//2 | cpu//2 | cpu//2 |
+| CPU only | cpu//8 | cpu//6 | cpu//4 | cpu//2 |
+
+> **참고**: NVENC 최소 해상도는 145×145px입니다. 그 이하 해상도는 CPU 인코딩으로 자동 전환됩니다.  
+> ffmpeg가 `h264_cuvid` / `hevc_cuvid` 디코더를 포함하지 않으면 NVDEC은 비활성화되고 CPU 디코딩으로 폴백합니다.
 
 ### 입력 폴더 구조 및 날짜 인식
 
