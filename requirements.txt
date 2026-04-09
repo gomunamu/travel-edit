@@ -1,6 +1,6 @@
 anthropic>=0.40.0
 openai>=1.0.0
-google-generativeai>=0.8.0
+google-genai>=1.0.0
 faster-whisper>=1.0.0
 reverse_geocoder>=1.5.1
 tqdm>=4.66.0

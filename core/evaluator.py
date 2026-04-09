@@ -331,7 +331,13 @@ def _build_transcript_text(transcript: dict) -> str:
             if s.get("no_speech_prob", 1) < 0.5 and s.get("text")]
     if not segs:
         return "(음성 없음)"
-    return "\n".join(f"[{s['start']:.1f}s~{s['end']:.1f}s] {s['text']}" for s in segs)
+    import re as _re
+    def _clean(t: str) -> str:
+        # JSON/HTTP body를 깨뜨리는 제어 문자 제거 (탭·줄바꿈은 유지)
+        return _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', t)
+    return "\n".join(
+        f"[{s['start']:.1f}s~{s['end']:.1f}s] {_clean(s['text'])}" for s in segs
+    )
 
 
 def _rule_based_eval(duration: float, has_speech: bool, speech_sec: float) -> dict:
