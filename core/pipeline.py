@@ -408,8 +408,36 @@ def render_day(
     filter_complex 로 한 번에 트림·스케일·자막·병합 (중간 파일 없음).
     """
     out_res = get_day_resolution(day_segments)
-    selected = []
-    prev_location = None
+
+    def _make_clip(seg, ev):
+        clip = dict(seg)
+        decision = ev.get("decision", "keep")
+        if decision == "trim":
+            clip["trim_start"] = float(ev.get("keep_start", 0))
+            clip["trim_end"]   = float(ev.get("keep_end", seg["duration"]))
+        else:
+            clip["trim_start"] = 0.0
+            clip["trim_end"]   = seg["duration"]
+        clip["eval"] = ev
+        return clip
+
+    def _print_clip(clip, tag):
+        ev = clip["eval"]
+        sc = ev.get("score", {})
+        total  = sc.get("total",  "?")
+        visual = sc.get("visual", "-")
+        speech = sc.get("speech", "-")
+        scene  = sc.get("scene",  "-")
+        flow   = sc.get("flow",   "-")
+        print(
+            f"    [{tag} {total:>3}점"
+            f"  시각{visual}/음성{speech}/장면{scene}/흐름{flow}] "
+            f"{clip['filename']} {clip['trim_start']:.1f}~{clip['trim_end']:.1f}s"
+            f"  {ev.get('reason','')}"
+        )
+
+    selected = []   # 평가 통과
+    discarded = []  # 버림 (min_day_duration 구제 후보)
 
     for seg in day_segments:
         h = seg["clip_hash"]
@@ -420,45 +448,65 @@ def render_day(
             sc = ev.get("score", {})
             total = sc.get("total", "?")
             print(f"    [버림 {total:>3}점] {seg['filename']} - {ev.get('reason','')}")
+            discarded.append((seg, ev))
             continue
 
-        clip = dict(seg)
-        if decision == "trim":
-            clip["trim_start"] = float(ev.get("keep_start", 0))
-            clip["trim_end"]   = float(ev.get("keep_end", seg["duration"]))
-        else:
-            clip["trim_start"] = 0.0
-            clip["trim_end"]   = seg["duration"]
+        clip = _make_clip(seg, ev)
+        selected.append(clip)
+        _print_clip(clip, "트림" if decision == "trim" else "살림")
 
-        # 장소 결정
+    # ── 최소 분량 보장 ─────────────────────────────────────────────────────
+    min_dur = getattr(_config, "MIN_DAY_DURATION", 0)  # seconds
+    if min_dur > 0:
+        selected_dur = sum(c["trim_end"] - c["trim_start"] for c in selected)
+        if selected_dur < min_dur:
+            # 단계 1: 버린 클립을 고득점 순으로 추가
+            discarded_sorted = sorted(
+                discarded,
+                key=lambda x: x[1].get("score", {}).get("total", 0),
+                reverse=True,
+            )
+            rescued = []
+            for seg, ev in discarded_sorted:
+                if selected_dur >= min_dur:
+                    break
+                clip = _make_clip(seg, ev)
+                rescued.append(clip)
+                selected_dur += clip["trim_end"] - clip["trim_start"]
+
+            # 단계 2: 그래도 부족하면 남은 버린 클립 전부 추가
+            if selected_dur < min_dur:
+                rescued_hashes = {c["clip_hash"] for c in rescued}
+                for seg, ev in discarded_sorted:
+                    if seg["clip_hash"] not in rescued_hashes:
+                        clip = _make_clip(seg, ev)
+                        rescued.append(clip)
+                        rescued_hashes.add(seg["clip_hash"])
+
+            if rescued:
+                mode = "전체 포함" if selected_dur < min_dur else "고득점 구제"
+                print(f"  [최소분량] {min_dur//60}분 미달 → {mode}: {len(rescued)}개 클립 추가")
+                for clip in rescued:
+                    _print_clip(clip, "구제")
+                selected.extend(rescued)
+                # 촬영 시간순 재정렬
+                selected.sort(key=lambda c: c.get("creation_time", ""))
+
+    if not selected:
+        print(f"  → {day_key}: 선택된 클립 없음, 건너뜀")
+        return False
+
+    # 장소 오버레이 (최종 순서 확정 후 적용)
+    prev_location = None
+    for clip in selected:
         location_name = None
-        if seg.get("gps"):
-            location_name = coords_to_str(seg["gps"])
+        if clip.get("gps"):
+            location_name = coords_to_str(clip["gps"])
         if location_name and location_name != prev_location:
             clip["show_location"] = location_name
             prev_location = location_name
         else:
             clip["show_location"] = None
-
-        clip["eval"] = ev
-        selected.append(clip)
-        sc = ev.get("score", {})
-        total  = sc.get("total",  "?")
-        visual = sc.get("visual", "-")
-        speech = sc.get("speech", "-")
-        scene  = sc.get("scene",  "-")
-        flow   = sc.get("flow",   "-")
-        tag = "트림" if decision == "trim" else "살림"
-        print(
-            f"    [{tag} {total:>3}점"
-            f"  시각{visual}/음성{speech}/장면{scene}/흐름{flow}] "
-            f"{seg['filename']} {clip['trim_start']:.1f}~{clip['trim_end']:.1f}s"
-            f"  {ev.get('reason','')}"
-        )
-
-    if not selected:
-        print(f"  → {day_key}: 선택된 클립 없음, 건너뜀")
-        return False
 
     print(f"  출력 해상도: {out_res[0]}x{out_res[1]}, {len(selected)}개 클립")
 

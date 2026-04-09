@@ -137,6 +137,13 @@ GEMINI_MODEL   = os.environ.get("GEMINI_MODEL",   "gemini-2.5-flash")
 # .env: SPLIT_ORIENTATION=true
 SPLIT_ORIENTATION = os.environ.get("SPLIT_ORIENTATION", "false").lower() in ("1", "true", "on")
 
+# === 최소 분량 설정 ===
+# 하루 영상이 이 시간(초) 미만이면, 버린 클립 중 고득점 순으로 채움
+# 그래도 부족하면 해당 날의 모든 클립을 포함
+# 0 = 비활성 (기본)
+# .env: MIN_DAY_DURATION=300  (5분)
+MIN_DAY_DURATION = int(os.environ.get("MIN_DAY_DURATION", "0"))
+
 # === 아카이브 설정 ===
 # 하루치 렌더링 완료 후 mp4(+srt)를 이 폴더로 이동 (None = 이동 안 함)
 # .env: ARCHIVE_DIR=/mnt/nas/travel_archive

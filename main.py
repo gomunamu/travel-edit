@@ -114,6 +114,13 @@ def main():
         help="출력 해상도 (기본: auto=원본 최고 해상도 기준 4K/1440p/FHD/720p 자동 선택)"
     )
     parser.add_argument(
+        "--min-day-duration", type=float, default=None, metavar="MINUTES",
+        help=(
+            "하루 영상 최소 길이(분). 미달 시 버린 클립 중 고득점 순으로 채움. "
+            "그래도 부족하면 해당 날 전체 클립 포함. (기본: 비활성)"
+        )
+    )
+    parser.add_argument(
         "--archive-dir", default=None, metavar="DIR",
         help="하루치 완료 시 mp4(+srt)를 이 폴더로 이동 (NVMe 용량 절약용)"
     )
@@ -159,6 +166,8 @@ def main():
         config.STT_REFINE = False
     if args.resolution:
         config.OUTPUT_RESOLUTION = None if args.resolution == "auto" else _RES_MAP[args.resolution]
+    if args.min_day_duration is not None:
+        config.MIN_DAY_DURATION = int(args.min_day_duration * 60)
     if args.archive_dir:
         config.ARCHIVE_DIR = args.archive_dir
     if args.split_orientation:
