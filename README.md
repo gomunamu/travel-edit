@@ -175,8 +175,8 @@ STT_REFINE_MODEL=claude-haiku-4-5-20251001
 
 # 출력 설정
 OUTPUT_RESOLUTION=auto         # auto | 4k | 1440p | fhd | 720p | 1920x1080
-CRF=18                         # 화질/용량 균형 (낮을수록 화질↑ 용량↑, 18=시각적 무손실)
-VIDEO_CODEC=h264               # h264 (호환성 최대) | h265 (동일 화질에서 용량 약 50% 절감)
+CRF=24                         # 화질/용량 균형 (낮을수록 화질↑ 용량↑, H.265 기준 24=여행 영상 실질 무손실)
+VIDEO_CODEC=h265               # h264 (호환성 최대) | h265 (동일 화질에서 용량 약 50% 절감)
 FFMPEG_PRESET=medium           # ultrafast | fast | medium | slow (느릴수록 압축률↑)
 RENDER_WORKERS=0               # 0 = 해상도·GPU 여부에 따라 자동 결정
 
@@ -230,8 +230,8 @@ output/
 |------|--------|------|
 | `OUTPUT_RESOLUTION` | auto | 출력 해상도 (원본 최고 해상도 자동 선택) |
 | `OUTPUT_FPS` | 30 | 출력 프레임레이트 |
-| `CRF` | 18 | 화질/용량 균형 (H.264 기준: 18=시각적 무손실, 낮을수록 용량↑) |
-| `VIDEO_CODEC` | h264 | 인코딩 코덱 (`h264` / `h265`) — H.265는 동일 화질에서 용량 약 50% 절감 |
+| `CRF` | 24 | 화질/용량 균형 (H.265 기준: 24=여행 영상 실질 무손실, 낮을수록 용량↑) |
+| `VIDEO_CODEC` | h265 | 인코딩 코덱 (`h264` / `h265`) — H.265는 동일 화질에서 용량 약 50% 절감 |
 | `FFMPEG_PRESET` | medium | 인코딩 속도/압축률 트레이드오프 (`ultrafast` ~ `veryslow`) |
 | `USE_NVENC` | auto | NVIDIA GPU 하드웨어 인코딩 (`auto` / `true` / `false`) |
 | `NVENC_PRESET` | p4 | NVENC 품질/속도 (`p1`=최속 ~ `p7`=최고품질) |

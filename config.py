@@ -75,10 +75,10 @@ OUTPUT_FPS = 30
 # CRF: H.264 기준 18 = 시각적 무손실, 9 = 거의 완전 무손실(용량 매우 큼)
 #      H.265 기준 22 ≈ H.264 CRF 18과 동등 화질, 용량은 H.264의 약 절반
 # .env: CRF=18
-CRF = int(os.environ.get("CRF", "18"))
+CRF = int(os.environ.get("CRF", "24"))
 # VIDEO_CODEC: h264 (호환성 최대) | h265 (동일 화질에서 용량 약 50% 절감, 인코딩 느림)
 # .env: VIDEO_CODEC=h265
-_codec_env = os.environ.get("VIDEO_CODEC", "h264").strip().lower()
+_codec_env = os.environ.get("VIDEO_CODEC", "h265").strip().lower()
 VIDEO_CODEC = "libx265" if _codec_env in ("h265", "hevc", "libx265") else "libx264"
 FFMPEG_PRESET = os.environ.get("FFMPEG_PRESET", "medium")
 
