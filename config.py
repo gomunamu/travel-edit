@@ -60,6 +60,10 @@ FFMPEG_PRESET = os.environ.get("FFMPEG_PRESET", "medium")
 # NVENC_PRESET: p1(최속)~p7(최고품질), 기본 p4 (medium 상당)
 USE_NVENC = os.environ.get("USE_NVENC", "auto").strip().lower()
 NVENC_PRESET = os.environ.get("NVENC_PRESET", "p4")
+# GeForce 소비자용 GPU는 NVENC 동시 세션을 3개로 제한 (하드웨어 제약)
+# Quadro / RTX A시리즈 / Data Center GPU는 무제한 → 높게 설정 가능
+# .env: NVENC_MAX_SESSIONS=3
+NVENC_MAX_SESSIONS = int(os.environ.get("NVENC_MAX_SESSIONS", "3"))
 
 # === 자막 설정 ===
 SUBTITLE_FONT = "Arial"            # 한글 지원 폰트: NanumGothic, Malgun Gothic 등

@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Tuple, Optional
 
-from config import CRF, FFMPEG_PRESET, RENDER_WORKERS, VIDEO_CODEC, USE_NVENC, NVENC_PRESET
+from config import CRF, FFMPEG_PRESET, RENDER_WORKERS, VIDEO_CODEC, USE_NVENC, NVENC_PRESET, NVENC_MAX_SESSIONS
 
 try:
     from tqdm import tqdm as _tqdm_cls
@@ -31,31 +31,47 @@ def _detect_nvenc() -> bool:
 
 
 _NVENC_AVAILABLE: Optional[bool] = None  # lazy 감지
+_nvenc_semaphore: Optional[threading.Semaphore] = None  # 동시 세션 제한
 
 
 def _use_nvenc() -> bool:
-    global _NVENC_AVAILABLE
+    global _NVENC_AVAILABLE, _nvenc_semaphore
     if USE_NVENC == "false":
         return False
     if USE_NVENC == "true":
-        return True  # 사용자가 강제 활성화 (실패해도 진행)
+        if _nvenc_semaphore is None:
+            _nvenc_semaphore = threading.Semaphore(NVENC_MAX_SESSIONS)
+        return True  # 사용자가 강제 활성화
     # auto: 처음 호출 시 한 번만 감지
     if _NVENC_AVAILABLE is None:
         _NVENC_AVAILABLE = _detect_nvenc()
         if _NVENC_AVAILABLE:
-            print("  [NVENC] GPU 하드웨어 인코딩 활성화 (RTX/GTX NVENC)")
+            _nvenc_semaphore = threading.Semaphore(NVENC_MAX_SESSIONS)
+            print(f"  [NVENC] GPU 하드웨어 인코딩 활성화 (동시 세션 최대 {NVENC_MAX_SESSIONS}개)")
         else:
             print("  [NVENC] GPU 인코딩 불가 → CPU 인코딩 사용")
-    return _NVENC_AVAILABLE
+    return bool(_NVENC_AVAILABLE)
 
 
-def _build_encode_args(codec_extra_tag: bool = False) -> list:
+def _is_nvenc_session_error(stderr: str) -> bool:
+    """NVENC 세션 한도 초과 또는 VRAM 부족 에러 감지."""
+    return any(k in stderr for k in (
+        "out of memory",
+        "incompatible client key",
+        "OpenEncodeSessionEx failed",
+        "InitializeEncoder failed",
+        "CreateInputBuffer failed",
+    ))
+
+
+def _build_encode_args(codec_extra_tag: bool = False, force_cpu: bool = False) -> list:
     """
     인코더 설정 인수 반환.
     NVENC: -c:v h264_nvenc -preset p4 -cq {CRF} -b:v 0
     CPU:   -c:v libx264   -crf {CRF} -preset medium
+    force_cpu=True 이면 NVENC 설정 무시하고 CPU 인수 반환.
     """
-    if _use_nvenc():
+    if not force_cpu and _use_nvenc():
         nvenc_codec = "hevc_nvenc" if VIDEO_CODEC == "libx265" else "h264_nvenc"
         args = ["-c:v", nvenc_codec, "-preset", NVENC_PRESET, "-cq", str(CRF), "-b:v", "0"]
         if codec_extra_tag and VIDEO_CODEC == "libx265":
@@ -252,33 +268,58 @@ def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int]) -> bool
         output_path,
     ]
 
-    # NVDEC: GPU 하드웨어 디코딩 (-hwaccel cuda)
-    # 프레임은 시스템 RAM으로 내려받으므로 기존 필터(scale/pad/ass)와 호환됨
-    hwaccel_args = ["-hwaccel", "cuda"] if _use_nvenc() else []
+    return _run_encode(clip, output_path, abs_start, abs_dur, encode_args, use_gpu=_use_nvenc())
 
+
+def _build_cmd(clip: dict, abs_start: float, abs_dur: float,
+               encode_args: list, use_gpu: bool) -> list:
+    hwaccel = ["-hwaccel", "cuda"] if use_gpu else []
+    base = ["ffmpeg", "-y"] + hwaccel + [
+        "-ss", f"{abs_start:.3f}", "-t", f"{abs_dur:.3f}", "-i", clip["filepath"],
+    ]
     if clip.get("has_audio", True):
-        cmd = (
-            ["ffmpeg", "-y"]
-            + hwaccel_args
-            + ["-ss", f"{abs_start:.3f}", "-t", f"{abs_dur:.3f}", "-i", clip["filepath"]]
-            + encode_args
-        )
-    else:
-        # 오디오 없는 클립: lavfi 무음 소스를 두 번째 입력으로 추가
-        cmd = (
-            ["ffmpeg", "-y"]
-            + hwaccel_args
-            + ["-ss", f"{abs_start:.3f}", "-t", f"{abs_dur:.3f}", "-i", clip["filepath"],
-               "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
-               "-map", "0:v", "-map", "1:a",
-               "-t", f"{abs_dur:.3f}"]  # anullsrc는 무한이므로 출력 길이 제한
-            + encode_args
-        )
+        return base + encode_args
+    # 오디오 없는 클립: lavfi 무음 소스 추가
+    return base + [
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+        "-map", "0:v", "-map", "1:a",
+        "-t", f"{abs_dur:.3f}",
+    ] + encode_args
 
-    result = subprocess.run(cmd, capture_output=True)
+
+def _run_encode(clip: dict, output_path: str,
+                abs_start: float, abs_dur: float,
+                encode_args: list, use_gpu: bool) -> bool:
+    """ffmpeg 실행. use_gpu=True 시 NVENC 세마포어 획득 후 실행."""
+    sem = _nvenc_semaphore if use_gpu else None
+    if sem:
+        sem.acquire()
+    try:
+        cmd = _build_cmd(clip, abs_start, abs_dur, encode_args, use_gpu)
+        result = subprocess.run(cmd, capture_output=True)
+    finally:
+        if sem:
+            sem.release()
+
     if result.returncode != 0:
         raw = result.stderr.decode(errors="replace")
-        # ffmpeg 에러는 stderr 앞부분에, 진행률은 뒷부분에 있으므로 양쪽 모두 표시
+        # NVENC 세션 한도/VRAM 부족 → CPU로 재시도
+        if use_gpu and _is_nvenc_session_error(raw):
+            print(f"\n  [NVENC 한도] {Path(clip['filepath']).name} → CPU 인코딩으로 재시도")
+            cpu_encode_args = _build_encode_args(codec_extra_tag=True, force_cpu=True)
+            # encode_args에서 -vf 값과 출력경로 이후 인수 재활용
+            vf_idx = encode_args.index("-vf")
+            vf_val = encode_args[vf_idx + 1]
+            out_idx = next(i for i, a in enumerate(encode_args)
+                           if not a.startswith("-") and i > 4)
+            tail_args = encode_args[out_idx:]  # output_path만 포함
+            cpu_full = ["-vf", vf_val] + cpu_encode_args + [
+                "-r", "30", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+                "-movflags", "+faststart",
+            ] + tail_args
+            return _run_encode(clip, output_path, abs_start, abs_dur,
+                               cpu_full, use_gpu=False)
         head = raw[:800]
         tail = raw[-400:] if len(raw) > 800 else ""
         err = head + ("\n...\n" + tail if tail else "")
