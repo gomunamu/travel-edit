@@ -32,6 +32,43 @@ brew install ffmpeg            # macOS
 pip install -r requirements.txt
 ```
 
+### Python 가상환경 (권장)
+
+CUDA / PyTorch 관련 패키지 충돌 방지를 위해 venv 사용을 권장합니다.
+
+```bash
+python3 -m venv ~/venvs/torch
+source ~/venvs/torch/bin/activate
+pip install -r requirements.txt
+```
+
+이후 실행 시에도 항상 같은 venv를 활성화한 상태에서 실행합니다.
+
+### Whisper 의존성 (faster-whisper)
+
+faster-whisper는 **PyTorch 기반** 패키지입니다 (TensorFlow 아님).  
+내부적으로 CTranslate2 엔진을 사용하며, CUDA + cuDNN이 필요합니다.
+
+| CUDA 버전 | cuDNN 버전 | faster-whisper |
+|-----------|-----------|----------------|
+| CUDA 12.x | cuDNN 9.x | ≥ 1.0.0 (권장) |
+| CUDA 11.x | cuDNN 8.x | 0.x 계열 |
+
+```bash
+# CUDA 12 + cuDNN 9 기준 설치 예시 (Ubuntu)
+pip install faster-whisper>=1.0.0
+```
+
+### Gemini API 패키지
+
+코드는 신버전 `google-genai` SDK를 사용합니다 (`from google import genai`).  
+구버전 `google-generativeai`와 혼용하면 ImportError가 발생합니다.
+
+```bash
+pip uninstall google-generativeai -y
+pip install google-genai>=1.0.0
+```
+
 ## 사용법
 
 ```bash
@@ -101,7 +138,11 @@ OUTPUT_RESOLUTION=auto         # auto | 4k | 1440p | fhd | 720p | 1920x1080
 CRF=18                         # 화질/용량 균형 (낮을수록 화질↑ 용량↑, 18=시각적 무손실)
 VIDEO_CODEC=h264               # h264 (호환성 최대) | h265 (동일 화질에서 용량 약 50% 절감)
 FFMPEG_PRESET=medium           # ultrafast | fast | medium | slow (느릴수록 압축률↑)
-RENDER_WORKERS=0               # 0 = cpu_count // 2 자동
+RENDER_WORKERS=0               # 0 = 해상도·GPU 여부에 따라 자동 결정
+
+# GPU 하드웨어 인코딩 (NVENC)
+USE_NVENC=auto                 # auto(감지) | true(강제) | false(비활성)
+NVENC_PRESET=p4                # p1(최속)~p7(최고품질), 기본 p4 (medium 상당)
 ```
 
 - `ANTHROPIC_API_KEY` 없으면 규칙 기반 클립 평가로 자동 대체
@@ -142,12 +183,42 @@ output/
 | `CRF` | 18 | 화질/용량 균형 (H.264 기준: 18=시각적 무손실, 낮을수록 용량↑) |
 | `VIDEO_CODEC` | h264 | 인코딩 코덱 (`h264` / `h265`) — H.265는 동일 화질에서 용량 약 50% 절감 |
 | `FFMPEG_PRESET` | medium | 인코딩 속도/압축률 트레이드오프 (`ultrafast` ~ `veryslow`) |
+| `USE_NVENC` | auto | NVIDIA GPU 하드웨어 인코딩 (`auto` / `true` / `false`) |
+| `NVENC_PRESET` | p4 | NVENC 품질/속도 (`p1`=최속 ~ `p7`=최고품질) |
 | `WHISPER_MODEL` | large-v3 | 음성 인식 모델 |
 | `SUBTITLE_LANG` | auto | 자막 언어 |
 | `SUBTITLE_MODE` | overlay | 자막 방식 |
 | `STT_REFINE` | true | LLM 자막 정제 사용 여부 |
 | `MAX_SEGMENT_DURATION` | 30초 | 클립 최대 길이 |
 | `MIN_SEGMENT_DURATION` | 2초 | 클립 최소 길이 |
-| `TRANSCRIBE_WORKERS` | 8 | 음성 인식 병렬 수 (VRAM에 따라 자동 제한) |
-| `RENDER_WORKERS` | auto | 렌더링 병렬 수 (기본: cpu_count // 2) |
+| `TRANSCRIBE_WORKERS` | 0(자동) | 음성 인식 병렬 수 (VRAM에 따라 자동 제한) |
+| `RENDER_WORKERS` | auto | 렌더링 병렬 수 (해상도·GPU 여부에 따라 자동 결정) |
 | `METADATA_WORKERS` | 32 | 메타데이터 추출 병렬 수 |
+
+### NVENC (GPU 하드웨어 인코딩)
+
+NVIDIA GPU가 있으면 자동으로 감지해 하드웨어 인코딩을 사용합니다.  
+CPU 인코딩(libx264) 대비 4K 기준 **10~30배 빠른** 인코딩 속도를 제공합니다.
+
+| 인코더 | 4K 속도 | CRF 호환 | 비고 |
+|--------|---------|----------|------|
+| libx264 (CPU) | 5~15 fps | CRF 사용 | 느리지만 호환성 최대 |
+| h264_nvenc (GPU) | 150~200 fps | `-cq` 사용 | CUDA 설치 필요 |
+| hevc_nvenc (GPU) | 120~180 fps | `-cq` 사용 | `VIDEO_CODEC=h265`일 때 |
+
+NVENC가 활성화되면 `RENDER_WORKERS`는 `cpu_count // 4`로 자동 조정됩니다.  
+(CPU 인코딩 시 4K는 `cpu_count // 8`로 제한하여 메모리 포화 방지)
+
+> **참고**: NVENC 최소 해상도는 145×145px입니다. 그 이하 해상도는 CPU 인코딩으로 자동 전환됩니다.
+
+### 입력 폴더 구조 및 날짜 인식
+
+입력 폴더를 재귀 탐색하므로 하위 디렉토리에 있는 영상도 모두 수집합니다.  
+날짜는 다음 순서로 인식합니다.
+
+1. **영상 메타데이터** — `creation_time` EXIF 태그 (가장 정확)
+2. **디렉토리명** — `2024-07-15/`, `20240715/`, `2024_07_15/` 형식 인식
+3. **파일명** — `VID_20240715_...`, `DJI_20240715...` 등 날짜 포함 파일명
+4. **파일 수정시간(mtime)** — 위 세 가지 모두 없을 때 최후 fallback
+
+메타데이터 없이 fallback으로 날짜를 추정한 파일은 실행 시 목록과 함께 안내됩니다.
