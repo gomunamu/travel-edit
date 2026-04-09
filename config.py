@@ -17,7 +17,34 @@ if _env_path.exists():
 # === 파이프라인 설정 ===
 MAX_SEGMENT_DURATION = 30          # 이 시간(초) 이상인 클립은 자동 분할
 MIN_SEGMENT_DURATION = 2           # 이 시간(초) 미만은 자동 버림
-PURE_LANDSCAPE_THRESHOLD = 10      # 음성 없이 이 시간(초) 이상이면 AI가 컷 평가
+
+# === 편집 스타일 ===
+# balanced    : 음성과 풍경 균형 (기본)
+# voice       : 음성/대화 우선, 무음 풍경 최소화
+# scene-short : 풍경 포함하되 10초 이내로 트림
+# scene-long  : 풍경 우선, 최대 30초 허용
+# highlight   : 최고 점수 클립만 엄선 (소셜 미디어 하이라이트)
+# vlog        : 말하는 장면 중심, 일상 브이로그 스타일
+# .env: EDIT_STYLE=voice
+EDIT_STYLE = os.environ.get("EDIT_STYLE", "balanced").strip().lower()
+
+# 스타일별 파라미터:
+#   landscape_sec  - 이 시간 이상의 무음 풍경을 AI가 컷/트림 평가
+#   max_keep_sec   - 무음 풍경 클립의 최대 유지 길이 (rule-based trim)
+#   discard_silent - True면 무음 클립을 rule-based에서 바로 버림
+_STYLE_TABLE = {
+    #                    landscape  max_keep  discard_silent
+    "balanced":         (10,        10,       False),
+    "voice":            ( 5,         5,       True ),
+    "scene-short":      (10,        10,       False),
+    "scene-long":       (30,        30,       False),
+    "highlight":        ( 5,         8,       False),
+    "vlog":             ( 5,         5,       True ),
+}
+_st = _STYLE_TABLE.get(EDIT_STYLE, _STYLE_TABLE["balanced"])
+PURE_LANDSCAPE_THRESHOLD = _st[0]   # AI 평가 트리거 임계값
+STYLE_MAX_LANDSCAPE      = _st[1]   # rule-based 트림 상한
+STYLE_DISCARD_SILENT     = _st[2]   # 무음 클립 즉시 버림 여부
 
 # === 출력 설정 ===
 # None = 원본 영상 최고 해상도 기준 자동 선택 (4K / 1440p / FHD / 720p 중 가장 가까운 상위 계단)

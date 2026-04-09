@@ -49,8 +49,10 @@ def _run_ffprobe_recover(filepath: str) -> dict:
 
 def _parse_creation_time(tags: dict) -> Optional[datetime]:
     candidates = [
-        tags.get("creation_time"),
+        # iPhone/Apple: 현지 시각 + 타임존 오프셋 포함 → 가장 정확한 촬영 날짜
         tags.get("com.apple.quicktime.creationdate"),
+        # 일반 카메라: UTC 기준 (한국·NZ 등 UTC 차이 큰 지역에서 날짜 오차 가능)
+        tags.get("creation_time"),
         tags.get("date_time_original"),
         tags.get("date"),
     ]
@@ -269,6 +271,8 @@ def get_video_info(filepath: str) -> Optional[dict]:
         "audio_bitrate_kbps": audio_bitrate if audio_bitrate else 192,
         "creation_time": creation_time.isoformat(),
         "creation_time_source": "metadata" if date_from_meta else "path/filename/mtime",
-        "day_key": creation_time.astimezone().strftime("%Y-%m-%d"),
+        # day_key: 타임존 오프셋이 있으면 그 오프셋 기준 날짜 사용 (촬영지 현지 날짜)
+        # 타임존 없거나 UTC 고정이면 시스템 로컬로 변환
+        "day_key": creation_time.strftime("%Y-%m-%d"),
         "gps": list(gps) if gps else None,
     }

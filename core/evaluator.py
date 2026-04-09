@@ -10,6 +10,7 @@ from config import (
     OPENAI_API_KEY, OPENAI_MODEL,
     GEMINI_API_KEY, GEMINI_MODEL,
     MIN_SEGMENT_DURATION, PURE_LANDSCAPE_THRESHOLD,
+    EDIT_STYLE, STYLE_MAX_LANDSCAPE, STYLE_DISCARD_SILENT,
 )
 from core.token_tracker import tracker as _tracker
 
@@ -17,7 +18,43 @@ SYSTEM_PROMPT = """당신은 10년 경력의 여행 브이로그 편집자이자
 여행 동영상의 각 클립을 분석하고, 최종 편집본에 포함할지 결정합니다.
 시청자가 지루하지 않도록, 재미있고 감동적인 장면만 선별하는 것이 목표입니다."""
 
+# 스타일별 AI 지침
+_STYLE_GUIDE = {
+    "balanced": (
+        "음성과 풍경을 균형 있게 선별하세요. "
+        "재미있는 대화·반응과 감동적인 풍경을 동등하게 평가합니다."
+    ),
+    "voice": (
+        "음성·대화가 있는 클립을 최우선으로 살리세요. "
+        "무음 풍경은 특별히 아름답지 않으면 버리거나, 최대 {max_keep}초로 짧게 트림하세요. "
+        "말하는 장면·감정 표현·현장 반응이 핵심입니다."
+    ),
+    "scene-short": (
+        "풍경을 포함하되 간결하게 유지하세요. "
+        "무음 풍경은 최대 {max_keep}초 이내로 트림하고, 가장 핵심 장면만 남기세요. "
+        "음성은 있으면 좋지만 필수가 아닙니다."
+    ),
+    "scene-long": (
+        "풍경과 분위기를 중시합니다. "
+        "무음 풍경도 최대 {max_keep}초까지 허용하며, 여행지의 감성·장소감을 전달하는 데 집중하세요. "
+        "음성은 보너스로 간주합니다."
+    ),
+    "highlight": (
+        "최고 품질의 클립만 엄선하세요. "
+        "visual·scene 점수가 낮거나 흔들리는 장면은 과감히 버리세요. "
+        "소셜 미디어 하이라이트 릴 수준의 완성도를 기준으로 삼으세요."
+    ),
+    "vlog": (
+        "말하는 장면·표정·반응 중심의 브이로그 스타일입니다. "
+        "카메라를 향해 말하거나 감정을 표현하는 장면을 우선하세요. "
+        "무음 풍경은 장면 전환용으로 최대 {max_keep}초만 허용합니다."
+    ),
+}
+
 EVAL_PROMPT = """다음 클립 정보를 분석하고 편집 결정과 품질 점수를 출력하세요.
+
+## 편집 스타일
+{style_guide}
 
 ## 클립 정보
 - 길이: {duration:.1f}초
@@ -193,6 +230,9 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
 
     transcript_text = _build_transcript_text(transcript)
 
+    style_guide = _STYLE_GUIDE.get(EDIT_STYLE, _STYLE_GUIDE["balanced"]).format(
+        max_keep=STYLE_MAX_LANDSCAPE
+    )
     prompt = EVAL_PROMPT.format(
         duration=duration, width=w, height=h,
         orientation="(세로 영상)" if is_portrait else "(가로 영상)",
@@ -200,6 +240,7 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
         speech_sec=speech_sec,
         transcript_text=transcript_text,
         threshold=PURE_LANDSCAPE_THRESHOLD,
+        style_guide=style_guide,
     )
 
     with _adaptive.slot():
@@ -341,8 +382,12 @@ def _build_transcript_text(transcript: dict) -> str:
 
 
 def _rule_based_eval(duration: float, has_speech: bool, speech_sec: float) -> dict:
-    if not has_speech and duration > PURE_LANDSCAPE_THRESHOLD:
-        return _decision("trim", "음성 없는 긴 풍경 - 앞부분만 유지", 0, min(8.0, duration), 35)
+    if not has_speech:
+        if STYLE_DISCARD_SILENT and duration > PURE_LANDSCAPE_THRESHOLD:
+            return _decision("discard", f"무음 풍경 ({EDIT_STYLE} 스타일: 무음 클립 제거)", 0, duration, 10)
+        if duration > PURE_LANDSCAPE_THRESHOLD:
+            keep = min(float(STYLE_MAX_LANDSCAPE), duration)
+            return _decision("trim", f"무음 풍경 트림 ({EDIT_STYLE}: 최대 {STYLE_MAX_LANDSCAPE}초)", 0, keep, 35)
     if has_speech and speech_sec > 2:
         return _decision("keep", "음성 포함", 0, duration, 60)
     if duration <= 10:

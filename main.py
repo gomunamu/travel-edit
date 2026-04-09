@@ -121,6 +121,19 @@ def main():
         "--split-orientation", action="store_true",
         help="가로/세로 영상을 별도 파일로 출력 (세로: travel_YYYY-MM-DD_vertical.mp4)"
     )
+    parser.add_argument(
+        "--style", default=None,
+        choices=["balanced", "voice", "scene-short", "scene-long", "highlight", "vlog"],
+        help=(
+            "편집 스타일 (기본: balanced)\n"
+            "  balanced   : 음성과 풍경 균형\n"
+            "  voice      : 음성/대화 우선, 무음 풍경 최소화\n"
+            "  scene-short: 풍경 포함, 10초 이내 트림\n"
+            "  scene-long : 풍경 우선, 최대 30초 허용\n"
+            "  highlight  : 최고 점수 클립만 엄선\n"
+            "  vlog       : 말하는 장면 중심 브이로그"
+        )
+    )
 
     args = parser.parse_args()
 
@@ -150,6 +163,12 @@ def main():
         config.ARCHIVE_DIR = args.archive_dir
     if args.split_orientation:
         config.SPLIT_ORIENTATION = True
+    if args.style:
+        config.EDIT_STYLE = args.style
+        _st = config._STYLE_TABLE.get(args.style, config._STYLE_TABLE["balanced"])
+        config.PURE_LANDSCAPE_THRESHOLD = _st[0]
+        config.STYLE_MAX_LANDSCAPE      = _st[1]
+        config.STYLE_DISCARD_SILENT     = _st[2]
 
     # 의존성 확인
     check_dependencies()
