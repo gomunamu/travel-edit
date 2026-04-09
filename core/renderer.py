@@ -7,13 +7,63 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Tuple, Optional
 
-from config import CRF, FFMPEG_PRESET, RENDER_WORKERS, VIDEO_CODEC
+from config import CRF, FFMPEG_PRESET, RENDER_WORKERS, VIDEO_CODEC, USE_NVENC, NVENC_PRESET
 
 try:
     from tqdm import tqdm as _tqdm_cls
     HAS_TQDM = True
 except ImportError:
     HAS_TQDM = False
+
+
+def _detect_nvenc() -> bool:
+    """ffmpeg에서 h264_nvenc 사용 가능 여부 확인 (실제 인코딩 시도).
+    NVENC 최소 해상도 제약(145px) 때문에 256x256 사용."""
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1",
+             "-c:v", "h264_nvenc", "-f", "null", "-"],
+            capture_output=True, timeout=10,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+_NVENC_AVAILABLE: Optional[bool] = None  # lazy 감지
+
+
+def _use_nvenc() -> bool:
+    global _NVENC_AVAILABLE
+    if USE_NVENC == "false":
+        return False
+    if USE_NVENC == "true":
+        return True  # 사용자가 강제 활성화 (실패해도 진행)
+    # auto: 처음 호출 시 한 번만 감지
+    if _NVENC_AVAILABLE is None:
+        _NVENC_AVAILABLE = _detect_nvenc()
+        if _NVENC_AVAILABLE:
+            print("  [NVENC] GPU 하드웨어 인코딩 활성화 (RTX/GTX NVENC)")
+        else:
+            print("  [NVENC] GPU 인코딩 불가 → CPU 인코딩 사용")
+    return _NVENC_AVAILABLE
+
+
+def _build_encode_args(codec_extra_tag: bool = False) -> list:
+    """
+    인코더 설정 인수 반환.
+    NVENC: -c:v h264_nvenc -preset p4 -cq {CRF} -b:v 0
+    CPU:   -c:v libx264   -crf {CRF} -preset medium
+    """
+    if _use_nvenc():
+        nvenc_codec = "hevc_nvenc" if VIDEO_CODEC == "libx265" else "h264_nvenc"
+        args = ["-c:v", nvenc_codec, "-preset", NVENC_PRESET, "-cq", str(CRF), "-b:v", "0"]
+        if codec_extra_tag and VIDEO_CODEC == "libx265":
+            args += ["-tag:v", "hvc1"]
+        return args
+    else:
+        codec_extra = ["-tag:v", "hvc1"] if codec_extra_tag and VIDEO_CODEC == "libx265" else []
+        return ["-c:v", VIDEO_CODEC, "-crf", str(CRF), "-preset", FFMPEG_PRESET] + codec_extra
 
 
 # 해상도 자동 선택 계단 (긴 변 기준, 내림차순)
@@ -74,17 +124,19 @@ def _worker_count(out_res: Tuple[int, int] = (1920, 1080)) -> int:
     if RENDER_WORKERS is not None:
         return max(1, RENDER_WORKERS)
     cpu = os.cpu_count() or 2
+    # NVENC: GPU가 인코딩 담당 → CPU/메모리 병목 없음, 디코딩 병렬만 고려
+    if _use_nvenc():
+        return max(1, cpu // 4)
+    # CPU 인코딩: 고해상도일수록 클립당 CPU/메모리 부하 증가
     long_side = max(out_res)
-    # 고해상도일수록 클립당 메모리/CPU 부하가 크므로 워커 수를 제한
-    if long_side >= 3840:   # 4K: 클립당 ~2GB 메모리
-        limit = max(1, cpu // 8)
+    if long_side >= 3840:   # 4K
+        return max(1, cpu // 8)
     elif long_side >= 2560: # 1440p
-        limit = max(1, cpu // 6)
+        return max(1, cpu // 6)
     elif long_side >= 1920: # 1080p
-        limit = max(1, cpu // 4)
+        return max(1, cpu // 4)
     else:                   # 720p 이하
-        limit = max(1, cpu // 2)
-    return limit
+        return max(1, cpu // 2)
 
 
 def render_day_onepass(
@@ -190,11 +242,9 @@ def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int]) -> bool
     if sub_path and Path(sub_path).exists():
         vf += f",ass='{_esc_path(sub_path)}'"
 
-    codec_extra = ["-tag:v", "hvc1"] if VIDEO_CODEC == "libx265" else []
     encode_args = [
         "-vf", vf,
-        "-c:v", VIDEO_CODEC, "-crf", str(CRF), "-preset", FFMPEG_PRESET,
-        *codec_extra,
+        *_build_encode_args(codec_extra_tag=True),
         "-r", "30", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
         "-movflags", "+faststart",

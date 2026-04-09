@@ -55,6 +55,12 @@ _codec_env = os.environ.get("VIDEO_CODEC", "h264").strip().lower()
 VIDEO_CODEC = "libx265" if _codec_env in ("h265", "hevc", "libx265") else "libx264"
 FFMPEG_PRESET = os.environ.get("FFMPEG_PRESET", "medium")
 
+# NVENC: GPU 하드웨어 인코딩 (NVIDIA GPU 필요)
+# .env: USE_NVENC=true  → h264→h264_nvenc, h265→hevc_nvenc 로 자동 전환
+# NVENC_PRESET: p1(최속)~p7(최고품질), 기본 p4 (medium 상당)
+USE_NVENC = os.environ.get("USE_NVENC", "auto").strip().lower()
+NVENC_PRESET = os.environ.get("NVENC_PRESET", "p4")
+
 # === 자막 설정 ===
 SUBTITLE_FONT = "Arial"            # 한글 지원 폰트: NanumGothic, Malgun Gothic 등
 SUBTITLE_FONT_SIZE = 52
