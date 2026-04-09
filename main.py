@@ -117,6 +117,10 @@ def main():
         "--archive-dir", default=None, metavar="DIR",
         help="하루치 완료 시 mp4(+srt)를 이 폴더로 이동 (NVMe 용량 절약용)"
     )
+    parser.add_argument(
+        "--split-orientation", action="store_true",
+        help="가로/세로 영상을 별도 파일로 출력 (세로: travel_YYYY-MM-DD_vertical.mp4)"
+    )
 
     args = parser.parse_args()
 
@@ -144,6 +148,8 @@ def main():
         config.OUTPUT_RESOLUTION = None if args.resolution == "auto" else _RES_MAP[args.resolution]
     if args.archive_dir:
         config.ARCHIVE_DIR = args.archive_dir
+    if args.split_orientation:
+        config.SPLIT_ORIENTATION = True
 
     # 의존성 확인
     check_dependencies()

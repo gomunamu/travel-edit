@@ -547,11 +547,13 @@ def run(input_folder: str, output_folder: str):
         res_str = "자동 (원본 최고 해상도 기준)"
     else:
         res_str = f"{OUTPUT_RESOLUTION[0]}x{OUTPUT_RESOLUTION[1]}"
+    orient_str = "가로/세로 분리" if _config.SPLIT_ORIENTATION else "혼합"
     print(f"\n{'='*60}")
     print(f"  여행 영상 자동 편집기")
     print(f"  입력: {input_folder}")
     print(f"  출력: {output_folder}")
     print(f"  해상도: {res_str}")
+    print(f"  방향: {orient_str}")
     print(f"{'='*60}\n")
 
     run_start = time.time()
@@ -602,17 +604,26 @@ def run(input_folder: str, output_folder: str):
 
     # 6. 일자별 렌더링
     print("\n[6/6] 일자별 편집 및 렌더링...")
+    if _config.SPLIT_ORIENTATION:
+        print("  [방향 분리] 가로/세로 영상을 별도 파일로 출력")
 
-    # 날짜별 그룹화
-    day_groups = defaultdict(list)
+    # 날짜별 (+ 방향별) 그룹화
+    # key: (day_key, suffix)  suffix = "" | "_vertical"
+    day_groups: dict = defaultdict(list)
     for seg in segments:
-        day_groups[seg.get("day_key", "unknown")].append(seg)
+        day_key = seg.get("day_key", "unknown")
+        if _config.SPLIT_ORIENTATION:
+            suffix = "_vertical" if seg.get("is_portrait") else ""
+        else:
+            suffix = ""
+        day_groups[(day_key, suffix)].append(seg)
 
-    for day_key in sorted(day_groups.keys()):
-        day_segs = day_groups[day_key]
-        print(f"\n  ── {day_key} ({len(day_segs)}개 클립) ──")
+    for (day_key, suffix) in sorted(day_groups.keys()):
+        day_segs = day_groups[(day_key, suffix)]
+        orientation_label = " [세로]" if suffix == "_vertical" else (" [가로]" if _config.SPLIT_ORIENTATION else "")
+        print(f"\n  ── {day_key}{orientation_label} ({len(day_segs)}개 클립) ──")
 
-        output_path = str(out_dir / f"travel_{day_key}.mp4")
+        output_path = str(out_dir / f"travel_{day_key}{suffix}.mp4")
 
         if Path(output_path).exists():
             size_mb = Path(output_path).stat().st_size / 1_048_576

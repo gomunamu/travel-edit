@@ -96,10 +96,18 @@ def get_day_resolution(clips: List[dict]) -> Tuple[int, int]:
     OUTPUT_RESOLUTION이 None(auto)이면 클립 중 가장 긴 변을 기준으로
     4K / 1440p / FHD / 720p 중 업스케일이 없는 최고 계단을 선택.
     고정값이 설정돼 있으면 그대로 사용.
+    SPLIT_ORIENTATION이 켜져 있고 그룹이 세로 전용이면 해상도를 90도 회전해 반환.
     """
-    from config import OUTPUT_RESOLUTION
+    from config import OUTPUT_RESOLUTION, SPLIT_ORIENTATION
+
+    # 세로 전용 그룹 여부 (SPLIT_ORIENTATION 활성 시에만 의미 있음)
+    is_portrait_group = SPLIT_ORIENTATION and all(
+        c.get("is_portrait") for c in clips
+    )
+
     if OUTPUT_RESOLUTION is not None:
-        return OUTPUT_RESOLUTION
+        w, h = OUTPUT_RESOLUTION
+        return (h, w) if is_portrait_group else (w, h)
 
     max_long = 0
     for clip in clips:
@@ -108,32 +116,26 @@ def get_day_resolution(clips: List[dict]) -> Tuple[int, int]:
         max_long = max(max_long, w, h)
 
     if max_long == 0:
-        return (1920, 1080)
+        base = (1920, 1080)
+    else:
+        base = next(
+            ((tw, th) for tw, th in _RES_TIERS if max_long >= tw),
+            (1280, 720),
+        )
 
-    for tier_w, tier_h in _RES_TIERS:
-        if max_long >= tier_w:
-            return (tier_w, tier_h)
-
-    return (1280, 720)  # 최소
+    return (base[1], base[0]) if is_portrait_group else base
 
 
 def build_scale_filter(is_portrait: bool, out_w: int, out_h: int) -> str:
     """
-    세로 영상: 높이 맞추고 좌우 블랙 패딩 (필러박스)
-    가로 영상: 해상도 맞추고 필요시 레터박스
+    입력 영상을 out_w×out_h 안에 비율 유지하며 맞추고 남은 영역을 블랙으로 패딩.
+    가로/세로 출력 모두 동일한 공식으로 처리 (필러박스·레터박스 자동).
     """
-    if is_portrait:
-        return (
-            f"scale=-2:{out_h}:flags=lanczos,"
-            f"pad={out_w}:{out_h}:(ow-iw)/2:0:black,"
-            f"setsar=1"
-        )
-    else:
-        return (
-            f"scale={out_w}:{out_h}:force_original_aspect_ratio=decrease:flags=lanczos,"
-            f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2:black,"
-            f"setsar=1"
-        )
+    return (
+        f"scale={out_w}:{out_h}:force_original_aspect_ratio=decrease:flags=lanczos,"
+        f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2:black,"
+        f"setsar=1"
+    )
 
 
 def _worker_count(out_res: Tuple[int, int] = (1920, 1080)) -> int:

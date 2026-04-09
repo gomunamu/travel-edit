@@ -105,6 +105,11 @@ OPENAI_MODEL   = os.environ.get("OPENAI_MODEL",   "gpt-4o-mini")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL   = os.environ.get("GEMINI_MODEL",   "gemini-2.5-flash")
 
+# === 방향 분리 설정 ===
+# 가로/세로 영상을 별도 파일로 출력 (세로: travel_YYYY-MM-DD_vertical.mp4)
+# .env: SPLIT_ORIENTATION=true
+SPLIT_ORIENTATION = os.environ.get("SPLIT_ORIENTATION", "false").lower() in ("1", "true", "on")
+
 # === 아카이브 설정 ===
 # 하루치 렌더링 완료 후 mp4(+srt)를 이 폴더로 이동 (None = 이동 안 함)
 # .env: ARCHIVE_DIR=/mnt/nas/travel_archive
