@@ -124,9 +124,10 @@ def _worker_count(out_res: Tuple[int, int] = (1920, 1080)) -> int:
     if RENDER_WORKERS is not None:
         return max(1, RENDER_WORKERS)
     cpu = os.cpu_count() or 2
-    # NVENC: GPU가 인코딩 담당 → CPU/메모리 병목 없음, 디코딩 병렬만 고려
+    # NVENC + NVDEC: 인코딩·디코딩 모두 GPU → CPU는 필터(scale/pad)만 담당
+    # CPU 부하가 크게 줄어 cpu//2 까지 병렬 가능
     if _use_nvenc():
-        return max(1, cpu // 4)
+        return max(1, cpu // 2)
     # CPU 인코딩: 고해상도일수록 클립당 CPU/메모리 부하 증가
     long_side = max(out_res)
     if long_side >= 3840:   # 4K
@@ -251,21 +252,28 @@ def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int]) -> bool
         output_path,
     ]
 
+    # NVDEC: GPU 하드웨어 디코딩 (-hwaccel cuda)
+    # 프레임은 시스템 RAM으로 내려받으므로 기존 필터(scale/pad/ass)와 호환됨
+    hwaccel_args = ["-hwaccel", "cuda"] if _use_nvenc() else []
+
     if clip.get("has_audio", True):
         cmd = (
-            ["ffmpeg", "-y",
-             "-ss", f"{abs_start:.3f}", "-t", f"{abs_dur:.3f}", "-i", clip["filepath"]]
+            ["ffmpeg", "-y"]
+            + hwaccel_args
+            + ["-ss", f"{abs_start:.3f}", "-t", f"{abs_dur:.3f}", "-i", clip["filepath"]]
             + encode_args
         )
     else:
         # 오디오 없는 클립: lavfi 무음 소스를 두 번째 입력으로 추가
-        cmd = [
-            "ffmpeg", "-y",
-            "-ss", f"{abs_start:.3f}", "-t", f"{abs_dur:.3f}", "-i", clip["filepath"],
-            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
-            "-map", "0:v", "-map", "1:a",
-            "-t", f"{abs_dur:.3f}",  # anullsrc는 무한이므로 출력 길이 제한
-        ] + encode_args
+        cmd = (
+            ["ffmpeg", "-y"]
+            + hwaccel_args
+            + ["-ss", f"{abs_start:.3f}", "-t", f"{abs_dur:.3f}", "-i", clip["filepath"],
+               "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+               "-map", "0:v", "-map", "1:a",
+               "-t", f"{abs_dur:.3f}"]  # anullsrc는 무한이므로 출력 길이 제한
+            + encode_args
+        )
 
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode != 0:
