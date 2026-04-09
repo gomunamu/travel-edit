@@ -25,7 +25,7 @@ from core.segmenter import plan_segments
 from core.transcriber import transcribe, init_model_pool, get_pool_size, release_model_pool
 from core.refiner import refine_transcript
 from core.evaluator import evaluate_clip
-from core.geocoder import coords_to_str
+from core.geocoder import coords_to_str, get_location_hints
 from core.subtitle import make_subtitle_ass, make_subtitle_srt, make_location_ass
 from core.evaluator import _adaptive as _eval_adaptive
 from core.renderer import get_day_resolution, get_day_fps, render_day_onepass, is_valid_video
@@ -266,9 +266,15 @@ def refine_all(
     def _refine_one(seg):
         h = seg["clip_hash"]
         original = transcripts[h]
+        # GPS에서 지역명 힌트 추출 (국가 제외)
+        hints = []
+        gps = seg.get("gps")
+        if gps and len(gps) >= 2:
+            hints = get_location_hints(float(gps[0]), float(gps[1]))
         try:
             with semaphore:
-                result = refine_transcript(original, ANTHROPIC_API_KEY, STT_REFINE_MODEL)
+                result = refine_transcript(original, ANTHROPIC_API_KEY, STT_REFINE_MODEL,
+                                           location_hints=hints or None)
         except Exception as e:
             print(f"\n  [경고] STT 정제 실패 ({Path(seg['filepath']).name}): {e}")
             result = original  # 실패해도 원본으로 캐시 저장 → 재실행 시 재시도 안 함

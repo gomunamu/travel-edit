@@ -13,6 +13,7 @@ Whisper로 인식된 한국어 텍스트에는 다음과 같은 오류가 자주
 - 외부 소음으로 인한 단어 삽입·누락
 - 붙여쓰기/띄어쓰기 오류
 - 문맥과 맞지 않는 단어 대체
+- 고유명사(지명·브랜드) 오인식: 유사한 발음의 한국어 단어로 대체되는 경우
 - Whisper hallucination: 단어·구절이 수십 회 반복 (예: "살금 살금 살금 살금...")
   → 반복은 자연스러운 횟수(1~2회)로 줄이거나 완전히 제거하세요
 
@@ -24,6 +25,15 @@ Whisper로 인식된 한국어 텍스트에는 다음과 같은 오류가 자주
 3. 말투(반말/존댓말)를 바꾸지 마세요
 4. 의미를 추가하거나 요약하지 마세요
 5. 결과는 반드시 JSON 배열로만 반환하세요 (설명 없이)
+"""
+
+_LOCATION_HINT_TEMPLATE = """\
+
+## 촬영 장소 힌트
+이 클립은 다음 지역에서 촬영되었습니다: {locations}
+Whisper가 이 지명들을 발음이 비슷한 한국어 단어로 잘못 인식했을 수 있습니다.
+텍스트에서 이 지명의 한국어 외래어 표기(예: Queenstown→퀸스타운)와 유사한 오인식이 보이면 올바른 지명으로 교정하세요.
+지명이 등장하지 않는 경우 이 힌트는 무시하세요.\
 """
 
 
@@ -52,10 +62,16 @@ def remove_repetitions(text: str, threshold: int = 4) -> str:
     return text.strip()
 
 
-def refine_transcript(transcript: dict, api_key: str, model: str) -> dict:
+def refine_transcript(
+    transcript: dict,
+    api_key: str,
+    model: str,
+    location_hints: Optional[list] = None,
+) -> dict:
     """
     transcript의 segments 텍스트를 LLM으로 정제한다.
     has_speech=False 또는 segments가 없으면 원본 그대로 반환.
+    location_hints: GPS에서 추출한 지역명 목록 (국가 제외). 지명 오인식 교정에 활용.
     """
     if not transcript.get("has_speech") or not transcript.get("segments"):
         return transcript
@@ -66,13 +82,20 @@ def refine_transcript(transcript: dict, api_key: str, model: str) -> dict:
     if not any(texts):
         return transcript
 
+    # 지역명 힌트가 있으면 system prompt에 추가
+    system = _SYSTEM_PROMPT
+    if location_hints:
+        system += _LOCATION_HINT_TEMPLATE.format(
+            locations=", ".join(location_hints)
+        )
+
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
             model=model,
             max_tokens=4096,
-            system=_SYSTEM_PROMPT,
+            system=system,
             messages=[
                 {
                     "role": "user",

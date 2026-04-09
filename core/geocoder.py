@@ -49,3 +49,33 @@ def coords_to_str(gps: list) -> Optional[str]:
     if not gps or len(gps) < 2:
         return None
     return get_location_name(float(gps[0]), float(gps[1]))
+
+
+@lru_cache(maxsize=2000)
+def get_location_hints(lat: float, lon: float) -> list:
+    """
+    GPS 좌표에서 STT 교정용 지역명 힌트를 반환한다.
+    국가명은 제외하고 도시·행정구역·지역명만 수집 (중복·빈값 제거).
+    예: ["Queenstown", "Otago", "Queenstown-Lakes District"]
+    """
+    try:
+        import reverse_geocoder as rg
+        results = rg.search([(lat, lon)], verbose=False)
+        if not results:
+            return []
+        r = results[0]
+        candidates = [
+            r.get("name", ""),
+            r.get("admin1", ""),
+            r.get("admin2", ""),
+        ]
+        seen = set()
+        hints = []
+        for c in candidates:
+            c = c.strip()
+            if c and c not in seen:
+                seen.add(c)
+                hints.append(c)
+        return hints
+    except Exception:
+        return []
