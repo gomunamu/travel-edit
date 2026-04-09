@@ -262,6 +262,13 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
         return _rule_based_eval(duration, has_speech, speech_sec)
 
 
+# ─── 공통: 프롬프트 sanitize ─────────────────────────────────────────────────
+def _sanitize(text: str) -> str:
+    """JSON/HTTP body를 깨뜨리는 제어 문자 제거. 탭(\\t)·줄바꿈(\\n\\r)은 유지."""
+    import re
+    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+
+
 # ─── API 호출 (result, is_rate_limited) 반환 ──────────────────────────────
 def _call_claude(prompt: str, duration: float) -> Tuple[Optional[dict], bool]:
     try:
@@ -270,7 +277,7 @@ def _call_claude(prompt: str, duration: float) -> Tuple[Optional[dict], bool]:
         msg = client.messages.create(
             model=CLAUDE_MODEL, max_tokens=512,
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": _sanitize(prompt)}],
         )
         _tracker.record("Anthropic", CLAUDE_MODEL,
                         msg.usage.input_tokens, msg.usage.output_tokens)
@@ -289,8 +296,8 @@ def _call_openai(prompt: str, duration: float) -> Tuple[Optional[dict], bool]:
         msg = client.chat.completions.create(
             model=OPENAI_MODEL, max_tokens=512,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": prompt},
+                {"role": "system", "content": _sanitize(SYSTEM_PROMPT)},
+                {"role": "user",   "content": _sanitize(prompt)},
             ],
         )
         _tracker.record("OpenAI", OPENAI_MODEL,
@@ -310,9 +317,9 @@ def _call_gemini(prompt: str, duration: float) -> Tuple[Optional[dict], bool]:
         client = genai.Client(api_key=GEMINI_API_KEY)
         response = client.models.generate_content(
             model=GEMINI_MODEL,
-            contents=prompt,
+            contents=_sanitize(prompt),
             config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
+                system_instruction=_sanitize(SYSTEM_PROMPT),
                 max_output_tokens=512,
             ),
         )
@@ -373,12 +380,8 @@ def _build_transcript_text(transcript: dict) -> str:
             if s.get("no_speech_prob", 1) < 0.5 and s.get("text")]
     if not segs:
         return "(음성 없음)"
-    import re as _re
-    def _clean(t: str) -> str:
-        # JSON/HTTP body를 깨뜨리는 제어 문자 제거 (탭·줄바꿈은 유지)
-        return _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', t)
     return "\n".join(
-        f"[{s['start']:.1f}s~{s['end']:.1f}s] {_clean(s['text'])}" for s in segs
+        f"[{s['start']:.1f}s~{s['end']:.1f}s] {s['text']}" for s in segs
     )
 
 
