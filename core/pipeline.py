@@ -504,16 +504,29 @@ def render_day(
         return False
 
     # 장소 오버레이 (최종 순서 확정 후 적용)
+    # carry-forward: 클립이 짧아서 오버레이가 충분히 표시되지 못하면
+    # 같은 장소의 다음 클립으로 오버레이를 이전한다.
+    _min_overlay_sec = LOCATION_DISPLAY_DURATION  # 이 시간 미만이면 다음 클립으로 넘김
     prev_location = None
+    location_remaining = 0.0  # 아직 표시해야 할 오버레이 잔여 시간
     for clip in selected:
         location_name = None
         if clip.get("gps"):
             location_name = coords_to_str(clip["gps"])
+        clip_dur = clip["trim_end"] - clip["trim_start"]
+
         if location_name and location_name != prev_location:
+            # 새 장소 진입
             clip["show_location"] = location_name
             prev_location = location_name
+            location_remaining = max(0.0, _min_overlay_sec - clip_dur)
+        elif location_remaining > 0 and location_name == prev_location:
+            # 같은 장소인데 이전 클립이 너무 짧아서 오버레이를 이어서 표시
+            clip["show_location"] = prev_location
+            location_remaining = max(0.0, location_remaining - clip_dur)
         else:
             clip["show_location"] = None
+            location_remaining = 0.0
 
     print(f"  출력 해상도: {out_res[0]}x{out_res[1]}, {out_fps}fps, {len(selected)}개 클립")
 
