@@ -503,6 +503,28 @@ def render_day(
         print(f"  → {day_key}: 선택된 클립 없음, 건너뜀")
         return False
 
+    # ── GPS 전파: GPS 없는 클립에 인접 클립의 GPS 보완 ────────────────────────
+    # 대부분의 영상(iPhone/DJI 등)은 GPS EXIF가 파일에 없을 수 있다.
+    # GPS가 없으면 지역명 오버레이 불가 → 같은 날 촬영 클립끼리
+    # forward/backward 패스로 보완한다 (selected는 이미 creation_time 정렬됨).
+    if any(c.get("gps") for c in selected):
+        # 1) Forward pass: 앞 클립의 GPS를 뒤로 전파
+        last_gps = None
+        for clip in selected:
+            if clip.get("gps"):
+                last_gps = clip["gps"]
+            elif last_gps:
+                clip["gps"] = last_gps
+                clip["_gps_interpolated"] = True
+        # 2) Backward pass: 앞쪽에 GPS가 없었던 클립을 뒤에서 앞으로 채움
+        last_gps = None
+        for clip in reversed(selected):
+            if clip.get("gps"):
+                last_gps = clip["gps"]
+            elif last_gps:
+                clip["gps"] = last_gps
+                clip["_gps_interpolated"] = True
+
     # 장소 오버레이 (최종 순서 확정 후 적용)
     # carry-forward: 클립이 짧아서 오버레이가 충분히 표시되지 못하면
     # 같은 장소의 다음 클립으로 오버레이를 이전한다.
