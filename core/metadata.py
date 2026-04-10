@@ -167,6 +167,67 @@ def _parse_gps(tags: dict) -> Optional[tuple]:
     return None
 
 
+def _parse_dji_srt(video_path: str) -> Optional[tuple]:
+    """DJI Osmo 등 DJI 기기의 .SRT 사이드카 파일에서 GPS 좌표 추출.
+
+    DJI SRT 포맷 예시:
+        [latitude: 37.123456] [longitude: 126.123456] [altitude: 50.0]
+    또는:
+        <latitude>37.123456</latitude><longitude>126.123456</longitude>
+    또는 한 줄에:
+        GPS(-122.4194,37.7749,100)
+    """
+    p = Path(video_path)
+    candidates = [p.with_suffix(".SRT"), p.with_suffix(".srt")]
+    srt_path = next((c for c in candidates if c.exists()), None)
+    if srt_path is None:
+        return None
+
+    # 패턴 1: [latitude: X] [longitude: X]
+    pat_bracket = re.compile(
+        r'\[latitude:\s*([+-]?\d+\.?\d*)\].*?\[longitude:\s*([+-]?\d+\.?\d*)\]',
+        re.IGNORECASE
+    )
+    # 패턴 2: <latitude>X</latitude><longitude>X</longitude>
+    pat_xml = re.compile(
+        r'<latitude>([+-]?\d+\.?\d*)</latitude>.*?<longitude>([+-]?\d+\.?\d*)</longitude>',
+        re.IGNORECASE | re.DOTALL
+    )
+    # 패턴 3: GPS(lon,lat,alt) — DJI 일부 펌웨어
+    pat_gps = re.compile(
+        r'GPS\(([+-]?\d+\.?\d*),\s*([+-]?\d+\.?\d*)',
+        re.IGNORECASE
+    )
+
+    try:
+        text = srt_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+
+    # 패턴 1
+    m = pat_bracket.search(text)
+    if m:
+        lat, lon = float(m.group(1)), float(m.group(2))
+        if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat != 0 or lon != 0):
+            return (round(lat, 6), round(lon, 6))
+
+    # 패턴 2
+    m = pat_xml.search(text)
+    if m:
+        lat, lon = float(m.group(1)), float(m.group(2))
+        if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat != 0 or lon != 0):
+            return (round(lat, 6), round(lon, 6))
+
+    # 패턴 3: GPS(lon, lat, alt) — 순서 주의
+    m = pat_gps.search(text)
+    if m:
+        lon, lat = float(m.group(1)), float(m.group(2))
+        if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat != 0 or lon != 0):
+            return (round(lat, 6), round(lon, 6))
+
+    return None
+
+
 def _check_file_integrity(filepath: str) -> Optional[str]:
     """사전 검사: 빈 파일만 필터링. moov atom 검사는 NAS에서 너무 느려 ffprobe에 위임."""
     if Path(filepath).stat().st_size == 0:
@@ -247,6 +308,8 @@ def get_video_info(filepath: str) -> Optional[dict]:
         creation_time = _fallback_creation_time(filepath)
 
     gps = _parse_gps(all_tags)
+    if gps is None:
+        gps = _parse_dji_srt(filepath)
 
     duration = float(fmt.get("duration", 0))
     if duration == 0:
