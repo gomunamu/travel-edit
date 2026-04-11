@@ -13,10 +13,13 @@ from typing import Optional
 # ─── 얼굴 검출기 (싱글톤) ─────────────────────────────────────────────────────
 _app = None
 _app_gpu: Optional[bool] = None
+_app_failed = False   # 한 번 실패하면 재시도하지 않음
 
 
 def _get_app(use_gpu: bool):
-    global _app, _app_gpu
+    global _app, _app_gpu, _app_failed
+    if _app_failed:
+        return None
     if _app is not None and _app_gpu == use_gpu:
         return _app
     try:
@@ -33,14 +36,19 @@ def _get_app(use_gpu: bool):
         return _app
     except Exception as e:
         print(f"  [모자이크] InsightFace 초기화 실패: {e}")
+        print(f"  [모자이크] 힌트: ~/venvs/torch/bin/pip install insightface onnxruntime-gpu")
+        _app_failed = True
         return None
 
 
 # ─── OpenCV DNN 폴백 ──────────────────────────────────────────────────────────
 _dnn_net = None
+_dnn_failed = False   # 한 번 실패하면 재시도하지 않음
 
 def _get_dnn():
-    global _dnn_net
+    global _dnn_net, _dnn_failed
+    if _dnn_failed:
+        return None
     if _dnn_net is not None:
         return _dnn_net
     try:
@@ -50,19 +58,23 @@ def _get_dnn():
         proto = os.path.join(model_dir, "deploy.prototxt")
         caffemodel = os.path.join(model_dir, "res10_300x300_ssd_iter_140000.caffemodel")
         if not os.path.exists(proto):
+            print("  [모자이크] OpenCV DNN 모델 다운로드 중 (deploy.prototxt)...")
             urllib.request.urlretrieve(
                 "https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt",
                 proto,
             )
         if not os.path.exists(caffemodel):
+            print("  [모자이크] OpenCV DNN 모델 다운로드 중 (res10 caffemodel, ~10MB)...")
             urllib.request.urlretrieve(
                 "https://github.com/opencv/opencv_3rdparty/raw/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel",
                 caffemodel,
             )
         _dnn_net = cv2.dnn.readNetFromCaffe(proto, caffemodel)
+        print("  [모자이크] OpenCV DNN 폴백 초기화 완료")
         return _dnn_net
     except Exception as e:
         print(f"  [모자이크] OpenCV DNN 로드 실패: {e}")
+        _dnn_failed = True
         return None
 
 
