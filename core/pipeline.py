@@ -611,6 +611,41 @@ def render_day(
 
         clips_info.append({**clip, "sub_path": sub_path, "loc_path": loc_path})
 
+    # ── 얼굴 모자이크: 렌더링 전 컷 클립 단위 처리 ──────────────────────────────
+    if getattr(_config, "FACE_MOSAIC", False):
+        from core.mosaic import apply_face_mosaic, is_korea
+        korea_only = getattr(_config, "FACE_MOSAIC_KOREA_ONLY", False)
+        if not korea_only or is_korea(selected):
+            from tve.tier import detect as _detect_tier
+            _tier = _detect_tier()
+            use_gpu = _tier.name in ("A", "B")
+            codec_m = getattr(_config, "VIDEO_CODEC", "libx265")
+            crf_m   = getattr(_config, "CRF", 23)
+            n_clips = len(clips_info)
+            print(f"\n[얼굴인식] 얼굴 모자이크 시작: {n_clips}개 클립 ({'GPU' if use_gpu else 'CPU'})")
+            for idx, clip in enumerate(clips_info, 1):
+                h = clip["clip_hash"]
+                t_start = clip.get("_src_start", 0.0) + clip.get("trim_start", 0.0)
+                t_end   = clip.get("_src_start", 0.0) + clip.get("trim_end", clip["duration"])
+                mosaic_path = str(cache.root / f"{h}_mosaic.mp4")
+                print(f"[얼굴인식] [{idx}/{n_clips}] {Path(clip['filepath']).name} "
+                      f"({t_start:.1f}~{t_end:.1f}초)")
+                if not Path(mosaic_path).exists():
+                    ok_m = apply_face_mosaic(
+                        clip["filepath"], mosaic_path,
+                        use_gpu=use_gpu, codec=codec_m, crf=crf_m,
+                        trim_start=t_start, trim_end=t_end,
+                    )
+                else:
+                    print(f"  [모자이크] 캐시 재사용: {Path(mosaic_path).name}")
+                    ok_m = True
+                if ok_m and Path(mosaic_path).exists():
+                    clip["filepath"]  = mosaic_path
+                    clip["_src_start"] = 0.0
+                    clip["trim_start"] = 0.0
+                    clip["trim_end"]   = t_end - t_start
+            print(f"[얼굴인식] 완료 [{n_clips}/{n_clips}]")
+
     print(f"  렌더링+병합 → {Path(output_path).name}")
     ok = render_day_onepass(clips_info, output_path, out_res, out_fps)
 
@@ -724,8 +759,6 @@ def run(input_folder: str, output_folder: str):
             suffix = ""
         day_groups[(day_key, suffix)].append(seg)
 
-    mosaic_queue: list[tuple[str, list]] = []  # (output_path, day_segs) 모자이크 대기열
-
     for (day_key, suffix) in sorted(day_groups.keys()):
         day_segs = day_groups[(day_key, suffix)]
         orientation_label = " [세로]" if suffix == "_vertical" else (" [가로]" if _config.SPLIT_ORIENTATION else "")
@@ -762,29 +795,6 @@ def run(input_folder: str, output_folder: str):
             size_mb = Path(final_path).stat().st_size / 1_048_576
             file_report.append({"name": Path(final_path).name, "path": final_path, "elapsed": elapsed, "size_mb": size_mb, "skipped": False})
             print(f"  ✓ 완료: {final_path} ({size_mb:.1f} MB, {elapsed:.0f}초)")
-            if getattr(_config, "FACE_MOSAIC", False):
-                mosaic_queue.append((final_path, day_segs))
-
-    # ── 7. 얼굴 모자이크 (렌더링 완료 후 별도 단계) ──────────────────────────
-    if mosaic_queue:
-        from core.mosaic import apply_face_mosaic, is_korea
-        from tve.tier import detect as _detect_tier
-        _tier = _detect_tier()
-        use_gpu = _tier.name in ("A", "B")
-        codec   = getattr(_config, "VIDEO_CODEC", "libx265")
-        crf     = getattr(_config, "CRF", 23)
-        korea_only = getattr(_config, "FACE_MOSAIC_KOREA_ONLY", False)
-
-        targets = [
-            (p, s) for p, s in mosaic_queue
-            if not korea_only or is_korea(s)
-        ]
-        total_mosaic = len(targets)
-        print(f"\n[얼굴인식] 얼굴 모자이크 시작: {total_mosaic}개 파일 ({'GPU' if use_gpu else 'CPU'})")
-        for idx, (mp_path, _segs) in enumerate(targets, 1):
-            print(f"[얼굴인식] [{idx}/{total_mosaic}] {Path(mp_path).name}")
-            apply_face_mosaic(mp_path, mp_path, use_gpu=use_gpu, codec=codec, crf=crf)
-        print(f"[얼굴인식] 완료 [{total_mosaic}/{total_mosaic}]")
 
     total_elapsed = time.time() - run_start
     total_size_mb  = sum(r["size_mb"] for r in file_report)

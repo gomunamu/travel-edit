@@ -118,6 +118,8 @@ def apply_face_mosaic(
     detect_interval: int = 5,
     codec: str = "libx265",
     crf: int = 23,
+    trim_start: float = 0.0,
+    trim_end: Optional[float] = None,
 ) -> bool:
     """
     동영상에 얼굴 모자이크를 적용한다.
@@ -125,11 +127,13 @@ def apply_face_mosaic(
     Parameters
     ----------
     input_path      : 원본 MP4
-    output_path     : 출력 MP4 (원본과 달라도 됨, 덮어쓰기 가능)
+    output_path     : 출력 MP4 (원본과 다른 경로여야 함)
     use_gpu         : InsightFace CUDAExecutionProvider 사용 여부
     detect_interval : N 프레임마다 얼굴 검출 (중간은 이전 결과 재사용)
     codec           : FFmpeg 비디오 코덱
     crf             : 재인코딩 CRF
+    trim_start      : 처리 시작 위치(초). 0 = 파일 처음부터
+    trim_end        : 처리 종료 위치(초). None = 파일 끝까지
 
     Returns True on success.
     """
@@ -141,7 +145,6 @@ def apply_face_mosaic(
     fps    = cap.get(cv2.CAP_PROP_FPS) or 25.0
     width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     # InsightFace 우선, 실패 시 DNN
     app = _get_app(use_gpu)
@@ -151,20 +154,37 @@ def apply_face_mosaic(
         cap.release()
         return False
 
-    # FFmpeg 파이프 열기 (오디오는 원본에서 복사)
+    # trim 구간으로 시크
+    if trim_start > 0:
+        cap.set(cv2.CAP_PROP_POS_MSEC, trim_start * 1000)
+
+    # 오디오: ffmpeg로 trim 구간 추출 후 mux
+    trim_dur = (trim_end - trim_start) if trim_end is not None else None
+    audio_args: list
+    if trim_dur is not None:
+        audio_args = [
+            "-ss", f"{trim_start:.3f}", "-t", f"{trim_dur:.3f}",
+            "-i", input_path,
+        ]
+    else:
+        audio_args = [
+            "-ss", f"{trim_start:.3f}",
+            "-i", input_path,
+        ]
+
     tmp_path = output_path + ".mosaic_tmp.mp4"
     ffmpeg_cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-f", "rawvideo", "-pix_fmt", "bgr24",
         "-s", f"{width}x{height}",
         "-r", str(fps),
-        "-i", "pipe:0",          # 모자이크된 영상
-        "-i", input_path,        # 오디오 소스
+        "-i", "pipe:0",          # 모자이크된 영상 (비디오)
+        *audio_args,             # trim된 오디오 소스
         "-map", "0:v:0",
         "-map", "1:a?",
         "-c:v", codec,
         "-crf", str(crf),
-        "-c:a", "copy",
+        "-c:a", "aac", "-b:a", "192k",
         "-shortest",
         tmp_path,
     ]
@@ -175,6 +195,12 @@ def apply_face_mosaic(
 
     try:
         while True:
+            # trim_end 초과 시 중단
+            if trim_end is not None:
+                pos_sec = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+                if pos_sec >= trim_end:
+                    break
+
             ret, frame = cap.read()
             if not ret:
                 break
@@ -213,9 +239,9 @@ def apply_face_mosaic(
             os.remove(tmp_path)
         return False
 
-    # 성공 → 원본 교체
     if os.path.exists(output_path):
         os.remove(output_path)
     os.rename(tmp_path, output_path)
-    print(f"  [모자이크] {frame_idx}프레임 처리 완료: {os.path.basename(output_path)}")
+    dur_str = f"{trim_start:.1f}~{trim_end:.1f}초" if trim_end else "전체"
+    print(f"  [모자이크] {frame_idx}프레임 처리 완료 ({dur_str}): {os.path.basename(output_path)}")
     return True
