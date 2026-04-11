@@ -1,8 +1,8 @@
 import os
 from pathlib import Path
 
-# .env 파일 로드 (python-dotenv 없이 직접 파싱)
-_env_path = Path(__file__).parent / ".env"
+# .env 파일 로드 — core/.env 단일 관리 (python-dotenv 없이 직접 파싱)
+_env_path = Path(__file__).parent / "core" / ".env"
 if _env_path.exists():
     for _line in _env_path.read_text(encoding="utf-8").splitlines():
         _line = _line.strip()
