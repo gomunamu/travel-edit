@@ -618,7 +618,7 @@ def render_day(
         if not korea_only or is_korea(selected):
             from tve.tier import detect as _detect_tier
             _tier = _detect_tier()
-            use_gpu = _tier.name in ("A", "B")
+            use_gpu = _tier.tier.name in ("A", "B")
             codec_m = getattr(_config, "VIDEO_CODEC", "libx265")
             crf_m   = getattr(_config, "CRF", 23)
             n_clips = len(clips_info)
