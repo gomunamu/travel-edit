@@ -622,16 +622,28 @@ def render_day(
             use_gpu = _tier.tier.name in ("A", "B")
             codec_m = getattr(_config, "VIDEO_CODEC", "libx265")
             crf_m   = getattr(_config, "CRF", 23)
-            # GPU: ONNX Runtime 세션별 VRAM 소비 적음 → 3 workers
-            # CPU: DNN은 코어 활용, cpu//4 (인코딩 병렬도 고려)
             cpu_cnt = os.cpu_count() or 4
-            workers = 3 if use_gpu else max(1, cpu_cnt // 4)
+            if use_gpu:
+                # ONNX Runtime은 다중 CUDA 세션 병렬 실행 지원.
+                # 여유 VRAM 기반으로 workers 산출: InsightFace ~150MB/세션 추정.
+                # 3GB 헤드룸(Whisper 등) 확보, 최소 4 최대 10.
+                try:
+                    import torch
+                    free_mb = torch.cuda.mem_get_info(0)[0] // (1024 * 1024)
+                    workers = max(4, min(10, (free_mb - 3072) // 150))
+                except Exception:
+                    workers = 6
+                detect_interval_m = 3   # GPU 여유 충분 → 더 자주 검출
+            else:
+                workers = max(1, cpu_cnt // 4)
+                detect_interval_m = 5
             n_clips = len(clips_info)
             done_count = 0
             done_lock  = threading.Lock()
 
             print(f"\n[얼굴인식] 얼굴 모자이크 시작: {n_clips}개 클립 "
-                  f"({'GPU' if use_gpu else 'CPU'}, 병렬 {workers}개)")
+                  f"({'GPU' if use_gpu else 'CPU'}, 병렬 {workers}개, "
+                  f"detect_interval={detect_interval_m})")
 
             # 클립별 작업 정의
             def _mosaic_one(clip_idx_clip):
@@ -652,6 +664,7 @@ def render_day(
                         clip["filepath"], mosaic_path,
                         use_gpu=use_gpu, codec=codec_m, crf=crf_m,
                         trim_start=t_start, trim_end=t_end,
+                        detect_interval=detect_interval_m,
                     )
 
                 with done_lock:

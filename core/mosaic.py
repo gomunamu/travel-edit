@@ -4,8 +4,10 @@ InsightFace(SCRFD/buffalo_sc) + GPU 우선, OpenCV DNN CPU 폴백.
 - 스레드 로컬 검출기 인스턴스: 병렬 클립 처리 시 각 스레드가 독립된 세션 유지
 - detect_interval 프레임마다 검출, 중간 프레임은 이전 결과 재사용
 - FFmpeg 파이프로 재인코딩 — trim 구간 오디오 mux
+- 파이프라인 I/O: 읽기/쓰기 전용 스레드로 GPU 추론과 오버랩하여 대기 시간 제거
 """
 import os
+import queue
 import threading
 import subprocess
 import cv2
@@ -227,15 +229,51 @@ def apply_face_mosaic(
     ]
     proc = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
 
+    # ── 파이프라인 I/O: 읽기/쓰기를 전용 스레드로 분리 ─────────────────────
+    # GPU 추론(메인 스레드)과 프레임 읽기/FFmpeg 쓰기를 오버랩하여 GPU 대기 시간 제거
+    _SENTINEL = object()
+    read_q  = queue.Queue(maxsize=24)   # 미리 읽어둔 raw 프레임
+    write_q = queue.Queue(maxsize=24)   # 모자이크 적용 완료 프레임
+    stop_flag = [False]
+
+    def _reader():
+        try:
+            while not stop_flag[0]:
+                if trim_end is not None and cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 >= trim_end:
+                    break
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                # stop_flag 체크를 위해 timeout put 사용
+                while not stop_flag[0]:
+                    try:
+                        read_q.put(frame, timeout=0.1)
+                        break
+                    except queue.Full:
+                        pass
+        finally:
+            read_q.put(_SENTINEL)
+            cap.release()
+
+    def _writer():
+        while True:
+            item = write_q.get()
+            if item is _SENTINEL:
+                break
+            proc.stdin.write(item.tobytes())
+
+    reader_t = threading.Thread(target=_reader, daemon=True)
+    writer_t = threading.Thread(target=_writer, daemon=True)
+    reader_t.start()
+    writer_t.start()
+
     frame_idx  = 0
     last_boxes: list = []
 
     try:
         while True:
-            if trim_end is not None and cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 >= trim_end:
-                break
-            ret, frame = cap.read()
-            if not ret:
+            frame = read_q.get()
+            if frame is _SENTINEL:
                 break
 
             if frame_idx % detect_interval == 0:
@@ -254,11 +292,21 @@ def apply_face_mosaic(
             for box in last_boxes:
                 _pixelate(frame, *box)
 
-            proc.stdin.write(frame.tobytes())
+            write_q.put(frame)
             frame_idx += 1
 
     finally:
-        cap.release()
+        # 리더 스레드 정리: 큐에 남은 항목 drain → reader_t 언블록
+        stop_flag[0] = True
+        while True:
+            try:
+                read_q.get_nowait()
+            except queue.Empty:
+                break
+        reader_t.join(timeout=3)
+        # 라이터 스레드 종료 신호
+        write_q.put(_SENTINEL)
+        writer_t.join(timeout=5)
         try:
             proc.stdin.close()
         except BrokenPipeError:
