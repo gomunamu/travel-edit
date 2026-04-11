@@ -118,7 +118,7 @@ SUBTITLE_MODE = os.environ.get("SUBTITLE_MODE", "overlay") # overlay|srt
 
 # === Claude AI 설정 ===
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = "claude-sonnet-4-6"
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 CLAUDE_MAX_CONCURRENT = int(os.environ.get("EVAL_WORKERS", "5"))  # 동시 AI 평가 수
 
 # === STT 정제 설정 ===
