@@ -611,39 +611,79 @@ def render_day(
 
         clips_info.append({**clip, "sub_path": sub_path, "loc_path": loc_path})
 
-    # ── 얼굴 모자이크: 렌더링 전 컷 클립 단위 처리 ──────────────────────────────
+    # ── 얼굴 모자이크: 렌더링 전 컷 클립 단위 병렬 처리 ────────────────────────
     if getattr(_config, "FACE_MOSAIC", False):
         from core.mosaic import apply_face_mosaic, is_korea
         korea_only = getattr(_config, "FACE_MOSAIC_KOREA_ONLY", False)
         if not korea_only or is_korea(selected):
             from tve.tier import detect as _detect_tier
-            _tier = _detect_tier()
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            _tier   = _detect_tier()
             use_gpu = _tier.tier.name in ("A", "B")
             codec_m = getattr(_config, "VIDEO_CODEC", "libx265")
             crf_m   = getattr(_config, "CRF", 23)
+            # GPU: ONNX Runtime 세션별 VRAM 소비 적음 → 3 workers
+            # CPU: DNN은 코어 활용, cpu//4 (인코딩 병렬도 고려)
+            cpu_cnt = os.cpu_count() or 4
+            workers = 3 if use_gpu else max(1, cpu_cnt // 4)
             n_clips = len(clips_info)
-            print(f"\n[얼굴인식] 얼굴 모자이크 시작: {n_clips}개 클립 ({'GPU' if use_gpu else 'CPU'})")
-            for idx, clip in enumerate(clips_info, 1):
+            done_count = 0
+            done_lock  = threading.Lock()
+
+            print(f"\n[얼굴인식] 얼굴 모자이크 시작: {n_clips}개 클립 "
+                  f"({'GPU' if use_gpu else 'CPU'}, 병렬 {workers}개)")
+
+            # 클립별 작업 정의
+            def _mosaic_one(clip_idx_clip):
+                idx, clip = clip_idx_clip
+                nonlocal done_count
                 h = clip["clip_hash"]
                 t_start = clip.get("_src_start", 0.0) + clip.get("trim_start", 0.0)
                 t_end   = clip.get("_src_start", 0.0) + clip.get("trim_end", clip["duration"])
                 mosaic_path = str(cache.root / f"{h}_mosaic.mp4")
-                print(f"[얼굴인식] [{idx}/{n_clips}] {Path(clip['filepath']).name} "
-                      f"({t_start:.1f}~{t_end:.1f}초)")
-                if not Path(mosaic_path).exists():
+                fname = Path(clip["filepath"]).name
+
+                if Path(mosaic_path).exists():
+                    print(f"[얼굴인식] [{idx}/{n_clips}] 캐시 재사용: {fname}")
+                    ok_m = True
+                else:
+                    print(f"[얼굴인식] [{idx}/{n_clips}] {fname} ({t_start:.1f}~{t_end:.1f}초)")
                     ok_m = apply_face_mosaic(
                         clip["filepath"], mosaic_path,
                         use_gpu=use_gpu, codec=codec_m, crf=crf_m,
                         trim_start=t_start, trim_end=t_end,
                     )
-                else:
-                    print(f"  [모자이크] 캐시 재사용: {Path(mosaic_path).name}")
-                    ok_m = True
+
+                with done_lock:
+                    done_count += 1
+                    cnt = done_count
+                print(f"[얼굴인식] [{cnt}/{n_clips}]")  # UI 진행바용
+
+                return idx, ok_m, mosaic_path, t_start, t_end
+
+            results = {}
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futs = {ex.submit(_mosaic_one, (i, c)): i
+                        for i, c in enumerate(clips_info, 1)}
+                for fut in as_completed(futs):
+                    try:
+                        idx, ok_m, mosaic_path, t_start, t_end = fut.result()
+                        results[idx] = (ok_m, mosaic_path, t_start, t_end)
+                    except Exception as exc:
+                        i = futs[fut]
+                        print(f"  [모자이크] 클립 {i} 오류: {exc}")
+
+            # 순서대로 clips_info 갱신
+            for i, clip in enumerate(clips_info, 1):
+                if i not in results:
+                    continue
+                ok_m, mosaic_path, t_start, t_end = results[i]
                 if ok_m and Path(mosaic_path).exists():
-                    clip["filepath"]  = mosaic_path
+                    clip["filepath"]   = mosaic_path
                     clip["_src_start"] = 0.0
                     clip["trim_start"] = 0.0
                     clip["trim_end"]   = t_end - t_start
+
             print(f"[얼굴인식] 완료 [{n_clips}/{n_clips}]")
 
     print(f"  렌더링+병합 → {Path(output_path).name}")
