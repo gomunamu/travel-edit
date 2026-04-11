@@ -16,6 +16,16 @@ def make_clip_hash(filepath: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def variant_tag(*parts: str) -> str:
+    """설정값 조합을 8자 해시로 변환 — 캐시 키 네임스페이스 구분용.
+
+    예: variant_tag("large-v3", "ko") → "a1b2c3d4"
+    같은 파일이라도 설정이 다르면 별도 캐시 슬롯을 사용하도록 한다.
+    """
+    raw = "|".join(parts)
+    return hashlib.sha256(raw.encode()).hexdigest()[:8]
+
+
 def make_segment_hash(parent_hash: str, segment_index: int) -> str:
     """분할된 세그먼트의 캐시 키"""
     raw = f"{parent_hash}|seg{segment_index}"

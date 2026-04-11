@@ -19,7 +19,7 @@ from config import (
     LOCATION_FONT_SIZE, LOCATION_MARGIN,
 )
 from core.token_tracker import tracker as _token_tracker
-from core.cache import Cache, make_clip_hash
+from core.cache import Cache, make_clip_hash, variant_tag
 from core.metadata import get_video_info, is_video
 from core.segmenter import plan_segments
 from core.transcriber import transcribe, init_model_pool, get_pool_size, release_model_pool
@@ -112,10 +112,11 @@ def segment_all(clips: List[dict], cache: Cache) -> List[dict]:
     """
     plan_path = cache.root / ".segment_plan.json"
 
-    # 클립 목록 지문 — clip_hash 는 파일 경로+mtime+size 기반이므로
-    # 파일이 추가·삭제·변경되면 지문이 달라진다
+    # 클립 목록 지문 — clip_hash(파일 경로+mtime+size) + 분할 설정까지 포함
+    # 파일 변경 또는 MAX/MIN_SEGMENT_DURATION 변경 시 자동 재계획
+    _seg_settings = f"|max={_config.MAX_SEGMENT_DURATION}|min={_config.MIN_SEGMENT_DURATION}"
     fingerprint = hashlib.sha256(
-        "|".join(c["clip_hash"] for c in clips).encode()
+        ("|".join(c["clip_hash"] for c in clips) + _seg_settings).encode()
     ).hexdigest()
 
     # 기존 계획 로드
@@ -158,12 +159,15 @@ def segment_all(clips: List[dict], cache: Cache) -> List[dict]:
 
 # ─── 4. 음성 인식 (모델 풀 병렬) ─────────────────────────────────────────
 def transcribe_all(segments: List[dict], cache: Cache) -> Dict[str, dict]:
+    # 캐시 키: whisper 모델 + 언어 설정이 바뀌면 재전사
+    _t_suffix = "transcript_" + variant_tag(_config.WHISPER_MODEL, _config.SUBTITLE_LANG)
+
     transcripts = {}
     need_transcribe = []
 
     for seg in segments:
         h = seg["clip_hash"]
-        cached = cache.load(h, "transcript")
+        cached = cache.load(h, _t_suffix)
         if cached:
             transcripts[h] = cached
         else:
@@ -205,7 +209,7 @@ def transcribe_all(segments: List[dict], cache: Cache) -> Dict[str, dict]:
         h = seg["clip_hash"]
         result = transcribe(seg["filepath"], start=src_start,
                             duration=dur, force_lang=force_lang)
-        cache.save(h, "transcript", result)
+        cache.save(h, _t_suffix, result)
 
         with active_lock:
             active.pop(tid, None)
@@ -234,9 +238,12 @@ def refine_all(
 ) -> Dict[str, dict]:
     """
     Whisper 결과를 Claude로 한 번 더 정제한다.
-    캐시 키: "transcript_refined" — 재실행 시 재사용.
+    캐시 키: STT_REFINE_MODEL이 바뀌면 재정제.
     """
     from config import ANTHROPIC_API_KEY, STT_REFINE_MODEL, CLAUDE_MAX_CONCURRENT
+
+    # 캐시 키: 정제 모델이 바뀌면 새 슬롯 사용
+    _r_suffix = "transcript_refined_" + variant_tag(STT_REFINE_MODEL)
 
     refined_map: Dict[str, dict] = {}
     need_refine = []
@@ -245,7 +252,7 @@ def refine_all(
         h = seg["clip_hash"]
         if h not in transcripts:
             continue
-        cached = cache.load(h, "transcript_refined")
+        cached = cache.load(h, _r_suffix)
         if cached:
             refined_map[h] = cached
         else:
@@ -278,7 +285,7 @@ def refine_all(
         except Exception as e:
             print(f"\n  [경고] STT 정제 실패 ({Path(seg['filepath']).name}): {e}")
             result = original  # 실패해도 원본으로 캐시 저장 → 재실행 시 재시도 안 함
-        cache.save(h, "transcript_refined", result)
+        cache.save(h, _r_suffix, result)
         with lock:
             refined_map[h] = result
 
@@ -343,19 +350,22 @@ def evaluate_all(
     transcripts: Dict[str, dict],
     cache: Cache,
 ) -> Dict[str, dict]:
+    # 캐시 키: EDIT_STYLE이 바뀌면 재평가 (같은 클립도 스타일에 따라 결과가 다름)
+    _e_suffix = "eval_" + variant_tag(_config.EDIT_STYLE)
+
     evaluations = {}
     need_eval = []
 
     for seg in segments:
         h = seg["clip_hash"]
-        cached = cache.load(h, "eval")
+        cached = cache.load(h, _e_suffix)
         if cached:
             evaluations[h] = cached
         else:
             need_eval.append(seg)
 
     if need_eval:
-        print(f"  AI 평가 필요: {len(need_eval)}개 (캐시 {len(evaluations)}개 재사용)")
+        print(f"  AI 평가 필요: {len(need_eval)}개 (캐시 {len(evaluations)}개 재사용, 스타일={_config.EDIT_STYLE})")
 
     lock = threading.Lock()
 
@@ -363,7 +373,7 @@ def evaluate_all(
         h = seg["clip_hash"]
         transcript = transcripts.get(h, {"segments": [], "has_speech": False, "total_speech_sec": 0})
         result = evaluate_clip(seg, transcript)
-        cache.save(h, "eval", result)
+        cache.save(h, _e_suffix, result)
         with lock:
             evaluations[h] = result
         return h, result
