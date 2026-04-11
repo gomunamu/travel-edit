@@ -724,6 +724,8 @@ def run(input_folder: str, output_folder: str):
             suffix = ""
         day_groups[(day_key, suffix)].append(seg)
 
+    mosaic_queue: list[tuple[str, list]] = []  # (output_path, day_segs) 모자이크 대기열
+
     for (day_key, suffix) in sorted(day_groups.keys()):
         day_segs = day_groups[(day_key, suffix)]
         orientation_label = " [세로]" if suffix == "_vertical" else (" [가로]" if _config.SPLIT_ORIENTATION else "")
@@ -743,20 +745,6 @@ def run(input_folder: str, output_folder: str):
             cache, output_path
         )
         if ok:
-            # ── 얼굴 모자이크 (선택) ──────────────────────────────────────────
-            if getattr(_config, "FACE_MOSAIC", False):
-                from core.mosaic import apply_face_mosaic, is_korea
-                korea_only = getattr(_config, "FACE_MOSAIC_KOREA_ONLY", False)
-                if not korea_only or is_korea(day_segs):
-                    from tve.tier import detect as _detect_tier
-                    _tier = _detect_tier()
-                    use_gpu = _tier.name in ("A", "B")
-                    codec   = getattr(_config, "VIDEO_CODEC", "libx265")
-                    crf     = getattr(_config, "CRF", 23)
-                    print(f"  [모자이크] 얼굴 처리 중 ({'GPU' if use_gpu else 'CPU'})…")
-                    apply_face_mosaic(output_path, output_path,
-                                      use_gpu=use_gpu, codec=codec, crf=crf)
-
             elapsed = time.time() - day_start
             final_path = output_path
             archive_dir = getattr(_config, "ARCHIVE_DIR", None)
@@ -774,6 +762,29 @@ def run(input_folder: str, output_folder: str):
             size_mb = Path(final_path).stat().st_size / 1_048_576
             file_report.append({"name": Path(final_path).name, "path": final_path, "elapsed": elapsed, "size_mb": size_mb, "skipped": False})
             print(f"  ✓ 완료: {final_path} ({size_mb:.1f} MB, {elapsed:.0f}초)")
+            if getattr(_config, "FACE_MOSAIC", False):
+                mosaic_queue.append((final_path, day_segs))
+
+    # ── 7. 얼굴 모자이크 (렌더링 완료 후 별도 단계) ──────────────────────────
+    if mosaic_queue:
+        from core.mosaic import apply_face_mosaic, is_korea
+        from tve.tier import detect as _detect_tier
+        _tier = _detect_tier()
+        use_gpu = _tier.name in ("A", "B")
+        codec   = getattr(_config, "VIDEO_CODEC", "libx265")
+        crf     = getattr(_config, "CRF", 23)
+        korea_only = getattr(_config, "FACE_MOSAIC_KOREA_ONLY", False)
+
+        targets = [
+            (p, s) for p, s in mosaic_queue
+            if not korea_only or is_korea(s)
+        ]
+        total_mosaic = len(targets)
+        print(f"\n[얼굴인식] 얼굴 모자이크 시작: {total_mosaic}개 파일 ({'GPU' if use_gpu else 'CPU'})")
+        for idx, (mp_path, _segs) in enumerate(targets, 1):
+            print(f"[얼굴인식] [{idx}/{total_mosaic}] {Path(mp_path).name}")
+            apply_face_mosaic(mp_path, mp_path, use_gpu=use_gpu, codec=codec, crf=crf)
+        print(f"[얼굴인식] 완료 [{total_mosaic}/{total_mosaic}]")
 
     total_elapsed = time.time() - run_start
     total_size_mb  = sum(r["size_mb"] for r in file_report)
