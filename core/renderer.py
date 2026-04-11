@@ -445,5 +445,6 @@ def is_valid_video(path: str) -> bool:
 
 
 def _esc_path(path: str) -> str:
-    """ffmpeg filter 경로 이스케이프"""
-    return path.replace("\\", "/").replace("'", "\\'").replace(":", "\\:")
+    """ffmpeg filter 경로 이스케이프.
+    단일 따옴표로 감싸진 값 안에서 ' 자체는 '\'' (종료→리터럴→재시작) 패턴으로 처리."""
+    return path.replace("\\", "/").replace(":", "\\:").replace("'", "'\\''")
