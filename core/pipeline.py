@@ -359,7 +359,7 @@ def evaluate_all(
     for seg in segments:
         h = seg["clip_hash"]
         cached = cache.load(h, _e_suffix)
-        if cached:
+        if cached is not None:
             evaluations[h] = cached
         else:
             need_eval.append(seg)
@@ -373,7 +373,10 @@ def evaluate_all(
         h = seg["clip_hash"]
         transcript = transcripts.get(h, {"segments": [], "has_speech": False, "total_speech_sec": 0})
         result = evaluate_clip(seg, transcript)
-        cache.save(h, _e_suffix, result)
+        try:
+            cache.save(h, _e_suffix, result)
+        except Exception as e:
+            print(f"  [경고] 평가 캐시 저장 실패 ({seg.get('filename', h)}): {e}")
         with lock:
             evaluations[h] = result
         return h, result
@@ -400,7 +403,10 @@ def evaluate_all(
         with ThreadPoolExecutor(max_workers=50) as ex:
             futures = [ex.submit(_eval_one, seg) for seg in file_segs]
             for future in as_completed(futures):
-                future.result()
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"  [경고] 평가 작업 실패 ({fname}): {e}")
                 if pbar:
                     pbar.update(1)
 
