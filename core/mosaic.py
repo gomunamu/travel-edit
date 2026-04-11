@@ -23,6 +23,26 @@ _dnn_failed = False               # OpenCV DNN 영구 실패 플래그
 _dnn_model_ready = False          # DNN 모델 파일 준비 완료 플래그
 
 
+def _ensure_insightface_importable():
+    """insightface가 현재 인터프리터에서 임포트 불가능하면 torch venv 경로를 sys.path에 추가."""
+    try:
+        import insightface  # noqa: F401
+        return
+    except ImportError:
+        pass
+    import sys, os, glob
+    # ~/venvs/torch/lib/python*/site-packages 검색
+    pattern = os.path.expanduser("~/venvs/torch/lib/python*/site-packages")
+    for sp in glob.glob(pattern):
+        if sp not in sys.path:
+            sys.path.insert(0, sp)
+    # onnxruntime / insightface 빌드 의존 라이브러리 경로도 추가
+    lib_path = os.path.expanduser("~/venvs/torch/lib")
+    ld = os.environ.get("LD_LIBRARY_PATH", "")
+    if lib_path not in ld:
+        os.environ["LD_LIBRARY_PATH"] = lib_path + (":" + ld if ld else "")
+
+
 def _get_app(use_gpu: bool):
     """스레드 로컬 InsightFace 인스턴스 반환. 실패 시 None."""
     global _app_failed
@@ -31,6 +51,7 @@ def _get_app(use_gpu: bool):
     # 이 스레드에 이미 올바른 인스턴스가 있으면 즉시 반환
     if getattr(_tls, 'app_gpu', None) == use_gpu and getattr(_tls, 'app', None) is not None:
         return _tls.app
+    _ensure_insightface_importable()
     try:
         from insightface.app import FaceAnalysis
         providers = (
