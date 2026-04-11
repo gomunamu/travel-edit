@@ -137,6 +137,11 @@ GEMINI_MODEL   = os.environ.get("GEMINI_MODEL",   "gemini-2.5-flash")
 # .env: SPLIT_ORIENTATION=true
 SPLIT_ORIENTATION = os.environ.get("SPLIT_ORIENTATION", "false").lower() in ("1", "true", "on")
 
+# === 얼굴 모자이크 설정 ===
+# .env: FACE_MOSAIC=true  / FACE_MOSAIC_KOREA_ONLY=true
+FACE_MOSAIC           = os.environ.get("FACE_MOSAIC",            "false").lower() in ("1", "true", "on")
+FACE_MOSAIC_KOREA_ONLY = os.environ.get("FACE_MOSAIC_KOREA_ONLY", "false").lower() in ("1", "true", "on")
+
 # === 최소 분량 설정 ===
 # 하루 영상이 이 시간(초) 미만이면, 버린 클립 중 고득점 순으로 채움
 # 그래도 부족하면 해당 날의 모든 클립을 포함

@@ -743,6 +743,20 @@ def run(input_folder: str, output_folder: str):
             cache, output_path
         )
         if ok:
+            # ── 얼굴 모자이크 (선택) ──────────────────────────────────────────
+            if getattr(_config, "FACE_MOSAIC", False):
+                from core.mosaic import apply_face_mosaic, is_korea
+                korea_only = getattr(_config, "FACE_MOSAIC_KOREA_ONLY", False)
+                if not korea_only or is_korea(day_segs):
+                    from tve.tier import detect as _detect_tier
+                    _tier = _detect_tier()
+                    use_gpu = _tier.name in ("A", "B")
+                    codec   = getattr(_config, "VIDEO_CODEC", "libx265")
+                    crf     = getattr(_config, "CRF", 23)
+                    print(f"  [모자이크] 얼굴 처리 중 ({'GPU' if use_gpu else 'CPU'})…")
+                    apply_face_mosaic(output_path, output_path,
+                                      use_gpu=use_gpu, codec=codec, crf=crf)
+
             elapsed = time.time() - day_start
             final_path = output_path
             archive_dir = getattr(_config, "ARCHIVE_DIR", None)
