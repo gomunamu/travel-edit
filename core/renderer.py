@@ -1,4 +1,6 @@
 """ffmpeg 기반 클립 렌더링 및 병합"""
+import atexit
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -278,9 +280,9 @@ def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int], out_fps
     loc_path = clip.get("loc_path")
     sub_path = clip.get("sub_path")
     if loc_path and Path(loc_path).exists():
-        vf += f',ass="{_esc_path(loc_path)}"'
+        vf += f",ass={_safe_filter_path(loc_path)}"
     if sub_path and Path(sub_path).exists():
-        vf += f',ass="{_esc_path(sub_path)}"'
+        vf += f",ass={_safe_filter_path(sub_path)}"
 
     encode_args = [
         "-vf", vf,
@@ -448,10 +450,35 @@ def is_valid_video(path: str) -> bool:
     return result.returncode == 0 and result.stdout.strip() != b""
 
 
-def _esc_path(path: str) -> str:
-    """ffmpeg filter 경로 이스케이프 (subprocess, no shell).
-    이중 따옴표로 감싸진 값 안에서 사용: f',ass="{_esc_path(p)}"'
-    이중 따옴표 내부에서 이스케이프 필요한 문자: \ → /, " → \\"
-    아포스트로피(')나 공백은 이중 따옴표 내에서 그대로 사용 가능.
+_safe_symlinks: set = set()
+
+
+def _cleanup_safe_symlinks():
+    for p in _safe_symlinks:
+        try:
+            Path(p).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+atexit.register(_cleanup_safe_symlinks)
+
+
+def _safe_filter_path(path: str) -> str:
+    """ffmpeg -vf filter 옵션 값으로 안전하게 사용할 수 있는 경로를 반환한다.
+    경로에 아포스트로피·공백·콜론 등 FFmpeg filter 파서가 특수문자로 처리하는
+    문자가 포함된 경우, /tmp/ 아래 해시 기반 심링크를 생성해 반환한다.
+    심링크 경로는 영문자·숫자·하이픈·점만 포함하므로 파서 오류가 없다.
     """
-    return path.replace("\\", "/").replace('"', '\\"')
+    _unsafe = frozenset("'\"\\:,;[] \t")
+    if not any(c in path for c in _unsafe):
+        return path
+    h = hashlib.md5(path.encode()).hexdigest()[:20]
+    safe = Path(f"/tmp/_tve_{h}{Path(path).suffix}")
+    try:
+        safe.unlink(missing_ok=True)
+        safe.symlink_to(path)
+        _safe_symlinks.add(str(safe))
+    except OSError:
+        return path  # 심링크 생성 실패 시 원본 경로로 폴백
+    return str(safe)
