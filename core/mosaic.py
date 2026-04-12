@@ -192,20 +192,24 @@ def apply_face_mosaic(
     crf: int = 23,
     trim_start: float = 0.0,
     trim_end: Optional[float] = None,
+    family_embeddings: Optional[list] = None,
+    family_threshold: float = 0.45,
 ) -> bool:
     """
     동영상 trim 구간에 얼굴 모자이크를 적용한다. 스레드 안전.
 
     Parameters
     ----------
-    input_path      : 원본 영상
-    output_path     : 출력 MP4 (원본과 다른 경로)
-    use_gpu         : InsightFace CUDAExecutionProvider 사용 여부
-    detect_interval : N 프레임마다 얼굴 검출 (중간 프레임은 이전 결과 재사용)
-    codec           : FFmpeg 비디오 코덱
-    crf             : 재인코딩 CRF
-    trim_start      : 처리 시작 위치(초)
-    trim_end        : 처리 종료 위치(초). None = 파일 끝까지
+    input_path         : 원본 영상
+    output_path        : 출력 MP4 (원본과 다른 경로)
+    use_gpu            : InsightFace CUDAExecutionProvider 사용 여부
+    detect_interval    : N 프레임마다 얼굴 검출 (중간 프레임은 이전 결과 재사용)
+    codec              : FFmpeg 비디오 코덱
+    crf                : 재인코딩 CRF
+    trim_start         : 처리 시작 위치(초)
+    trim_end           : 처리 종료 위치(초). None = 파일 끝까지
+    family_embeddings  : 모자이크에서 제외할 얼굴 임베딩 목록 (정규화된 np.ndarray)
+    family_threshold   : 가족 판정 코사인 유사도 임계값
 
     Returns True on success.
     """
@@ -295,8 +299,17 @@ def apply_face_mosaic(
                         x1, y1, x2, y2 = (int(v) for v in f.bbox.tolist())
                         x1, y1 = max(0, x1), max(0, y1)
                         x2, y2 = min(width, x2), min(height, y2)
-                        if x2 > x1 and y2 > y1:
-                            last_boxes.append((x1, y1, x2, y2))
+                        if not (x2 > x1 and y2 > y1):
+                            continue
+                        # 가족 얼굴이면 모자이크 제외
+                        if family_embeddings:
+                            emb_raw = getattr(f, 'embedding', None)
+                            if emb_raw is not None:
+                                emb = emb_raw / (np.linalg.norm(emb_raw) + 1e-8)
+                                if any(float(np.dot(emb, fe)) >= family_threshold
+                                       for fe in family_embeddings):
+                                    continue
+                        last_boxes.append((x1, y1, x2, y2))
                 else:
                     last_boxes = _detect_dnn(frame, net)
 

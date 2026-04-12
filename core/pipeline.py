@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import time
+import numpy as np
 from pathlib import Path
 from datetime import datetime, timezone
 from collections import defaultdict, OrderedDict
@@ -637,13 +638,22 @@ def render_day(
             else:
                 workers = max(1, cpu_cnt // 4)
                 detect_interval_m = 5
+            # 가족 임베딩 정규화 (config에서 읽기)
+            _raw_family = getattr(_config, 'FACE_MOSAIC_FAMILY_EMBEDDINGS', []) or []
+            family_embs = [
+                e / (np.linalg.norm(e) + 1e-8)
+                for e in _raw_family
+                if hasattr(e, '__len__')
+            ] or None
+
             n_clips = len(clips_info)
             done_count = 0
             done_lock  = threading.Lock()
 
+            fam_note = f", 가족 {len(family_embs)}명 제외" if family_embs else ""
             print(f"\n[얼굴인식] 얼굴 모자이크 시작: {n_clips}개 클립 "
                   f"({'GPU' if use_gpu else 'CPU'}, 병렬 {workers}개, "
-                  f"detect_interval={detect_interval_m})")
+                  f"detect_interval={detect_interval_m}{fam_note})")
 
             # 클립별 작업 정의
             def _mosaic_one(clip_idx_clip):
@@ -665,6 +675,7 @@ def render_day(
                         use_gpu=use_gpu, codec=codec_m, crf=crf_m,
                         trim_start=t_start, trim_end=t_end,
                         detect_interval=detect_interval_m,
+                        family_embeddings=family_embs,
                     )
 
                 with done_lock:
