@@ -19,6 +19,67 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
 
 
+def identify_family_from_embeddings(
+    all_embeddings: list,
+    similarity_threshold: float = SIMILARITY_THRESHOLD,
+    min_appearances: int = 3,
+) -> list:
+    """
+    미리 추출한 임베딩 목록에서 가족(자주 등장) 대표 임베딩 반환.
+
+    알고리즘
+    --------
+    1. greedy 클러스터링 (코사인 유사도 ≥ similarity_threshold → 동일인)
+    2. count 내림차순 정렬, min_appearances 미만 제거
+    3. 연속 count 비율 elbow 감지: count[i]/count[i-1] < 0.35 → 가족/타인 경계
+       (가족은 타인보다 3배 이상 등장하는 게 전형적)
+
+    Returns list of normalized np.ndarray (대표 임베딩).
+    """
+    if not all_embeddings:
+        return []
+
+    clusters: list[dict] = []
+    for emb in all_embeddings:
+        best_ci, best_sim = -1, 0.0
+        for ci, cl in enumerate(clusters):
+            s = _cosine(emb, cl['emb'])
+            if s > best_sim:
+                best_sim, best_ci = s, ci
+        if best_sim >= similarity_threshold:
+            cl = clusters[best_ci]
+            cl['count'] += 1
+            cl['emb'] = cl['emb'] * 0.9 + emb * 0.1
+            cl['emb'] /= (np.linalg.norm(cl['emb']) + 1e-8)
+        else:
+            clusters.append({'count': 1, 'emb': np.array(emb, dtype=np.float32)})
+
+    clusters.sort(key=lambda c: c['count'], reverse=True)
+    clusters = [c for c in clusters if c['count'] >= min_appearances]
+
+    if not clusters:
+        print("  [얼굴인식] 가족 판별: 등장 횟수 부족 — 가족 제외 없음")
+        return []
+
+    counts = [c['count'] for c in clusters]
+
+    # elbow: 비율이 0.35 미만으로 급락하는 첫 번째 지점 = 가족/타인 경계
+    family_end = len(counts)
+    for i in range(1, len(counts)):
+        if counts[i] / counts[i - 1] < 0.35:
+            family_end = i
+            break
+
+    family   = clusters[:family_end]
+    stranger = clusters[family_end:]
+    print(f"  [얼굴인식] 가족 판별: {len(family)}명 제외 "
+          f"(등장 {[c['count'] for c in family]}회) "
+          f"| 타인 {len(stranger)}명 "
+          f"(상위 등장 {[c['count'] for c in stranger[:5]]}회)")
+
+    return [c['emb'] for c in family]
+
+
 def scan_top_faces(
     input_dir: str,
     n: int = 5,

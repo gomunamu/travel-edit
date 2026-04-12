@@ -141,7 +141,8 @@ SPLIT_ORIENTATION = os.environ.get("SPLIT_ORIENTATION", "false").lower() in ("1"
 # .env: FACE_MOSAIC=true  / FACE_MOSAIC_KOREA_ONLY=true
 FACE_MOSAIC                  = os.environ.get("FACE_MOSAIC",            "false").lower() in ("1", "true", "on")
 FACE_MOSAIC_KOREA_ONLY       = os.environ.get("FACE_MOSAIC_KOREA_ONLY", "false").lower() in ("1", "true", "on")
-FACE_MOSAIC_FAMILY_EMBEDDINGS: list = []   # UI에서 런타임 주입 (np.ndarray 목록)
+FACE_MOSAIC_FAMILY_EXCLUDE   = os.environ.get("FACE_MOSAIC_FAMILY_EXCLUDE", "false").lower() in ("1", "true", "on")
+FACE_MOSAIC_FAMILY_EMBEDDINGS: list = []   # 파이프라인이 런타임에 채움 (np.ndarray 목록)
 
 # === 최소 분량 설정 ===
 # 하루 영상이 이 시간(초) 미만이면, 버린 클립 중 고득점 순으로 채움

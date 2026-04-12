@@ -612,9 +612,11 @@ def render_day(
 
         clips_info.append({**clip, "sub_path": sub_path, "loc_path": loc_path})
 
-    # ── 얼굴 모자이크: 렌더링 전 컷 클립 단위 병렬 처리 ────────────────────────
+    # ── 얼굴 모자이크: 렌더링 전 컷 클립 단위 처리 ──────────────────────────────
+    # 가족 제외 옵션 시: 1단계(임베딩 추출) → 가족 판별 → 2단계(모자이크 적용)
+    # 가족 제외 미사용 시: 단순 모자이크 적용
     if getattr(_config, "FACE_MOSAIC", False):
-        from core.mosaic import apply_face_mosaic, is_korea
+        from core.mosaic import apply_face_mosaic, extract_clip_embeddings, is_korea
         korea_only = getattr(_config, "FACE_MOSAIC_KOREA_ONLY", False)
         if not korea_only or is_korea(selected):
             from tve.tier import detect as _detect_tier
@@ -625,44 +627,78 @@ def render_day(
             crf_m   = getattr(_config, "CRF", 23)
             cpu_cnt = os.cpu_count() or 4
             if use_gpu:
-                # ONNX Runtime은 다중 CUDA 세션 병렬 실행 지원.
-                # 여유 VRAM 기반으로 workers 산출: InsightFace ~150MB/세션 추정.
-                # 3GB 헤드룸(Whisper 등) 확보, 최소 4 최대 10.
                 try:
                     import torch
                     free_mb = torch.cuda.mem_get_info(0)[0] // (1024 * 1024)
                     workers = max(4, min(10, (free_mb - 3072) // 150))
                 except Exception:
                     workers = 6
-                detect_interval_m = 3   # GPU 여유 충분 → 더 자주 검출
+                detect_interval_m = 3
             else:
                 workers = max(1, cpu_cnt // 4)
                 detect_interval_m = 5
-            # 가족 임베딩 정규화 (config에서 읽기)
-            _raw_family = getattr(_config, 'FACE_MOSAIC_FAMILY_EMBEDDINGS', []) or []
-            family_embs = [
-                e / (np.linalg.norm(e) + 1e-8)
-                for e in _raw_family
-                if hasattr(e, '__len__')
-            ] or None
 
             n_clips = len(clips_info)
+            family_embs = None
+            family_exclude = getattr(_config, "FACE_MOSAIC_FAMILY_EXCLUDE", False)
+
+            # ── 1단계: 임베딩 추출 (가족 제외 옵션 시) ──────────────────────────
+            if family_exclude:
+                print(f"\n[얼굴인식] 임베딩 시작: {n_clips}개 클립 "
+                      f"({'GPU' if use_gpu else 'CPU'}, 병렬 {workers}개)")
+                all_embs: list = []
+                emb_lock  = threading.Lock()
+                emb_done  = [0]
+
+                def _embed_one(i_clip):
+                    i, clip = i_clip
+                    t_start = clip.get("_src_start", 0.0) + clip.get("trim_start", 0.0)
+                    t_end   = clip.get("_src_start", 0.0) + clip.get("trim_end", clip["duration"])
+                    embs = extract_clip_embeddings(
+                        clip["filepath"], use_gpu=use_gpu,
+                        detect_interval=detect_interval_m,
+                        trim_start=t_start, trim_end=t_end,
+                    )
+                    with emb_lock:
+                        all_embs.extend(embs)
+                        emb_done[0] += 1
+                        cnt = emb_done[0]
+                    fname = Path(clip["filepath"]).name
+                    print(f"[얼굴인식] [{cnt}/{n_clips}] 임베딩 {len(embs)}개: {fname}")
+
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    futs = {ex.submit(_embed_one, (i, c)): i
+                            for i, c in enumerate(clips_info, 1)}
+                    for fut in as_completed(futs):
+                        try:
+                            fut.result()
+                        except Exception as exc:
+                            print(f"  [임베딩] 오류: {exc}")
+
+                # 가족 판별
+                from core.face_profile import identify_family_from_embeddings
+                family_embs = identify_family_from_embeddings(all_embs) or None
+                fam_cnt = len(family_embs) if family_embs else 0
+                print(f"[얼굴인식] 가족 {fam_cnt}명 확정 → 모자이크 2단계 진행")
+
+            # ── 2단계: 모자이크 적용 ─────────────────────────────────────────────
             done_count = 0
             done_lock  = threading.Lock()
+            # 가족 제외 + 결과 있을 때만 별도 캐시 suffix (재실행 시 혼용 방지)
+            cache_suffix = "_mosaic_fam.mp4" if family_embs else "_mosaic.mp4"
 
             fam_note = f", 가족 {len(family_embs)}명 제외" if family_embs else ""
             print(f"\n[얼굴인식] 얼굴 모자이크 시작: {n_clips}개 클립 "
                   f"({'GPU' if use_gpu else 'CPU'}, 병렬 {workers}개, "
                   f"detect_interval={detect_interval_m}{fam_note})")
 
-            # 클립별 작업 정의
             def _mosaic_one(clip_idx_clip):
                 idx, clip = clip_idx_clip
                 nonlocal done_count
                 h = clip["clip_hash"]
                 t_start = clip.get("_src_start", 0.0) + clip.get("trim_start", 0.0)
                 t_end   = clip.get("_src_start", 0.0) + clip.get("trim_end", clip["duration"])
-                mosaic_path = str(cache.root / f"{h}_mosaic.mp4")
+                mosaic_path = str(cache.root / f"{h}{cache_suffix}")
                 fname = Path(clip["filepath"]).name
 
                 if Path(mosaic_path).exists():
@@ -681,7 +717,7 @@ def render_day(
                 with done_lock:
                     done_count += 1
                     cnt = done_count
-                print(f"[얼굴인식] [{cnt}/{n_clips}]")  # UI 진행바용
+                print(f"[얼굴인식] [{cnt}/{n_clips}]")
 
                 return idx, ok_m, mosaic_path, t_start, t_end
 
@@ -697,7 +733,6 @@ def render_day(
                         i = futs[fut]
                         print(f"  [모자이크] 클립 {i} 오류: {exc}")
 
-            # 순서대로 clips_info 갱신
             for i, clip in enumerate(clips_info, 1):
                 if i not in results:
                     continue

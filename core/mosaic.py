@@ -169,6 +169,82 @@ def _pixelate(frame, x1, y1, x2, y2, strength: int = 15):
 
 
 # ─── 공개 API ─────────────────────────────────────────────────────────────────
+def extract_clip_embeddings(
+    input_path: str,
+    use_gpu: bool = True,
+    detect_interval: int = 3,
+    trim_start: float = 0.0,
+    trim_end: Optional[float] = None,
+) -> list:
+    """
+    클립에서 얼굴 인식 임베딩만 추출 (모자이크 없음). 스레드 안전.
+
+    Returns list of normalized np.ndarray (512차원).
+    InsightFace 없으면 빈 리스트 반환.
+    """
+    app = _get_app(use_gpu)
+    if app is None:
+        return []
+
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        return []
+
+    if trim_start > 0:
+        cap.set(cv2.CAP_PROP_POS_MSEC, trim_start * 1000)
+
+    _SENTINEL = object()
+    read_q    = queue.Queue(maxsize=24)
+    stop_flag = [False]
+
+    def _reader():
+        try:
+            while not stop_flag[0]:
+                if trim_end is not None and cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 >= trim_end:
+                    break
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                while not stop_flag[0]:
+                    try:
+                        read_q.put(frame, timeout=0.1)
+                        break
+                    except queue.Full:
+                        pass
+        finally:
+            read_q.put(_SENTINEL)
+            cap.release()
+
+    reader_t = threading.Thread(target=_reader, daemon=True)
+    reader_t.start()
+
+    embeddings = []
+    frame_idx  = 0
+
+    try:
+        while True:
+            frame = read_q.get()
+            if frame is _SENTINEL:
+                break
+            if frame_idx % detect_interval == 0:
+                for face in app.get(frame):
+                    emb_raw = getattr(face, 'embedding', None)
+                    if emb_raw is not None:
+                        emb = emb_raw / (np.linalg.norm(emb_raw) + 1e-8)
+                        embeddings.append(emb)
+            frame_idx += 1
+    finally:
+        stop_flag[0] = True
+        while True:
+            try:
+                read_q.get_nowait()
+            except queue.Empty:
+                break
+        reader_t.join(timeout=3)
+
+    return embeddings
+
+
 def is_korea(day_segs: list) -> bool:
     """세그먼트 목록 중 하나라도 한국(위도33~39 경도124~132) GPS면 True."""
     for seg in day_segs:
