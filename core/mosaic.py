@@ -48,29 +48,36 @@ def _get_app(use_gpu: bool):
     global _app_failed
     if _app_failed:
         return None
-    # 이 스레드에 이미 올바른 인스턴스가 있으면 즉시 반환
+    # 이 스레드에 이미 올바른 인스턴스가 있으면 즉시 반환 (lock 불필요)
     if getattr(_tls, 'app_gpu', None) == use_gpu and getattr(_tls, 'app', None) is not None:
         return _tls.app
     _ensure_insightface_importable()
-    try:
-        from insightface.app import FaceAnalysis
-        providers = (
-            ['CUDAExecutionProvider', 'CPUExecutionProvider']
-            if use_gpu else
-            ['CPUExecutionProvider']
-        )
-        a = FaceAnalysis(name='buffalo_sc', providers=providers)
-        a.prepare(ctx_id=0 if use_gpu else -1, det_size=(640, 640))
-        _tls.app = a
-        _tls.app_gpu = use_gpu
-        return _tls.app
-    except Exception as e:
-        with _init_lock:
+    # ONNX Runtime CUDAExecutionProvider 초기화는 동시에 여러 스레드가 시도하면
+    # 내부 CUDA 컨텍스트 초기화에서 데드락이 발생할 수 있음 → 직렬화
+    with _init_lock:
+        # lock 획득 후 다시 확인 (다른 스레드가 이미 초기화했을 수 있음)
+        if _app_failed:
+            return None
+        if getattr(_tls, 'app_gpu', None) == use_gpu and getattr(_tls, 'app', None) is not None:
+            return _tls.app
+        try:
+            from insightface.app import FaceAnalysis
+            providers = (
+                ['CUDAExecutionProvider', 'CPUExecutionProvider']
+                if use_gpu else
+                ['CPUExecutionProvider']
+            )
+            a = FaceAnalysis(name='buffalo_sc', providers=providers)
+            a.prepare(ctx_id=0 if use_gpu else -1, det_size=(640, 640))
+            _tls.app = a
+            _tls.app_gpu = use_gpu
+            return _tls.app
+        except Exception as e:
             if not _app_failed:
                 print(f"  [모자이크] InsightFace 초기화 실패: {e}")
                 print(f"  [모자이크] 힌트: ~/venvs/torch/bin/pip install insightface onnxruntime-gpu")
                 _app_failed = True
-        return None
+            return None
 
 
 def _ensure_dnn_models() -> tuple[str, str] | None:
@@ -179,6 +186,9 @@ def extract_clip_embeddings(
     """
     클립에서 얼굴 인식 임베딩만 추출 (모자이크 없음). 스레드 안전.
 
+    cap.grab() 으로 비검출 프레임을 디코딩 없이 건너뜀 — CPU 부하 최소화.
+    검출 프레임에만 cap.retrieve() 로 디코딩 후 GPU 추론.
+
     Returns list of normalized np.ndarray (512차원).
     InsightFace 없으면 빈 리스트 반환.
     """
@@ -193,54 +203,34 @@ def extract_clip_embeddings(
     if trim_start > 0:
         cap.set(cv2.CAP_PROP_POS_MSEC, trim_start * 1000)
 
-    _SENTINEL = object()
-    read_q    = queue.Queue(maxsize=24)
-    stop_flag = [False]
-
-    def _reader():
-        try:
-            while not stop_flag[0]:
-                if trim_end is not None and cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 >= trim_end:
-                    break
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                while not stop_flag[0]:
-                    try:
-                        read_q.put(frame, timeout=0.1)
-                        break
-                    except queue.Full:
-                        pass
-        finally:
-            read_q.put(_SENTINEL)
-            cap.release()
-
-    reader_t = threading.Thread(target=_reader, daemon=True)
-    reader_t.start()
-
     embeddings = []
     frame_idx  = 0
 
     try:
         while True:
-            frame = read_q.get()
-            if frame is _SENTINEL:
+            if trim_end is not None and cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 >= trim_end:
                 break
-            if frame_idx % detect_interval == 0:
-                for face in app.get(frame):
-                    emb_raw = getattr(face, 'embedding', None)
-                    if emb_raw is not None:
-                        emb = emb_raw / (np.linalg.norm(emb_raw) + 1e-8)
-                        embeddings.append(emb)
+
+            if frame_idx % detect_interval != 0:
+                # 비검출 프레임: 스트림만 전진, 디코딩 없음
+                if not cap.grab():
+                    break
+                frame_idx += 1
+                continue
+
+            # 검출 프레임: 디코딩
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            for face in app.get(frame):
+                emb_raw = getattr(face, 'embedding', None)
+                if emb_raw is not None:
+                    emb = emb_raw / (np.linalg.norm(emb_raw) + 1e-8)
+                    embeddings.append(emb)
             frame_idx += 1
     finally:
-        stop_flag[0] = True
-        while True:
-            try:
-                read_q.get_nowait()
-            except queue.Empty:
-                break
-        reader_t.join(timeout=3)
+        cap.release()
 
     return embeddings
 
@@ -334,7 +324,7 @@ def apply_face_mosaic(
     # GPU 추론(메인 스레드) 중에 다음 프레임을 미리 읽어 대기 시간 제거.
     # FFmpeg stdin 쓰기는 메인 스레드에서 동기 처리 — 스레드 경계의 partial-write 방지.
     _SENTINEL = object()
-    read_q    = queue.Queue(maxsize=24)
+    read_q    = queue.Queue(maxsize=4)
     stop_flag = [False]
 
     def _reader():

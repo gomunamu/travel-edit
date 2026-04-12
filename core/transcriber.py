@@ -178,7 +178,11 @@ def _extract_audio(video_path: str, wav_path: str,
     if duration is not None:
         cmd += ["-t", f"{duration:.3f}"]
     cmd += [wav_path]
-    subprocess.run(cmd, capture_output=True, timeout=120)
+    try:
+        subprocess.run(cmd, capture_output=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        # 타임아웃 시 빈 WAV로 처리 (호출자가 파일 크기로 판단)
+        pass
 
 
 def _is_cuda_oom(e: Exception) -> bool:
@@ -201,19 +205,19 @@ def transcribe(video_path: str, start: float = 0.0, duration: float = None,
         try:
             model = pool.get(timeout=120)  # 최대 2분 대기 (다른 워커 추론 완료 대기)
         except queue.Empty:
-            raise RuntimeError("CUDA OOM: 인스턴스가 모두 소진됨. VRAM 부족.")
+            raise RuntimeError("Whisper 모델 대기 타임아웃: 모든 인스턴스가 2분 이상 응답 없음.")
 
+        discard = False
         try:
             result = _transcribe_with(model, video_path, start=start,
                                       duration=duration, force_lang=force_lang)
-            pool.put(model)  # 성공: 반납
             return result
         except RuntimeError as e:
             if not _is_cuda_oom(e):
-                pool.put(model)
                 raise
             # OOM: 이 인스턴스를 즉시 폐기 (풀에 반납하지 않음)
             # → 같은 OOM 모델이 다른 워커에 재배분되는 것을 방지
+            discard = True
             with _pool_total_lock:
                 _pool_total -= 1
                 remaining = _pool_total
@@ -222,6 +226,10 @@ def transcribe(video_path: str, start: float = 0.0, duration: float = None,
             if remaining == 0:
                 raise RuntimeError("CUDA OOM: 인스턴스가 모두 소진됨. VRAM 부족.")
             time.sleep(2)  # 다른 워커들이 추론을 마칠 시간 확보 후 재시도
+        finally:
+            # OOM 폐기가 아닌 경우 반드시 모델 반납 (예외 종류 무관)
+            if not discard:
+                pool.put(model)
 
 
 # Whisper 언어 코드 매핑 (config SUBTITLE_LANG → Whisper language code)

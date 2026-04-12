@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import time
 import numpy as np
 from pathlib import Path
@@ -628,8 +629,16 @@ def render_day(
             cpu_cnt = os.cpu_count() or 4
             if use_gpu:
                 try:
-                    import torch
-                    free_mb = torch.cuda.mem_get_info(0)[0] // (1024 * 1024)
+                    # torch.cuda.mem_get_info() 는 CUDA context를 새로 초기화하면서
+                    # 이전 run 의 잔여 CUDA 상태와 충돌해 무한 대기할 수 있음.
+                    # nvidia-smi subprocess 로 대체 (timeout=5, CUDA context 불필요)
+                    _r = subprocess.run(
+                        ["nvidia-smi", "--query-gpu=memory.free",
+                         "--format=csv,noheader,nounits"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    free_mb = (int(_r.stdout.strip().split("\n")[0].strip())
+                               if _r.returncode == 0 else 0)
                     workers = max(4, min(10, (free_mb - 3072) // 150))
                 except Exception:
                     workers = 6
@@ -644,8 +653,11 @@ def render_day(
 
             # ── 1단계: 임베딩 추출 (가족 제외 옵션 시) ──────────────────────────
             if family_exclude:
+                # 임베딩 단계는 디코딩+GPU 추론 혼합 — 모자이크보다 CPU 비율 높음
+                # workers // 2 로 제한해 CPU 코어 포화 방지
+                emb_workers = max(2, workers // 2)
                 print(f"\n[얼굴인식] 임베딩 시작: {n_clips}개 클립 "
-                      f"({'GPU' if use_gpu else 'CPU'}, 병렬 {workers}개)")
+                      f"({'GPU' if use_gpu else 'CPU'}, 병렬 {emb_workers}개)")
                 all_embs: list = []
                 emb_lock  = threading.Lock()
                 emb_done  = [0]
@@ -666,7 +678,7 @@ def render_day(
                     fname = Path(clip["filepath"]).name
                     print(f"[얼굴인식] [{cnt}/{n_clips}] 임베딩 {len(embs)}개: {fname}")
 
-                with ThreadPoolExecutor(max_workers=workers) as ex:
+                with ThreadPoolExecutor(max_workers=emb_workers) as ex:
                     futs = {ex.submit(_embed_one, (i, c)): i
                             for i, c in enumerate(clips_info, 1)}
                     for fut in as_completed(futs):

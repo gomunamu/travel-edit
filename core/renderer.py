@@ -319,7 +319,11 @@ def _run_encode(clip: dict, output_path: str,
         sem.acquire()
     try:
         cmd = _build_cmd(clip, abs_start, abs_dur, encode_args, use_gpu)
-        result = subprocess.run(cmd, capture_output=True)
+        result = subprocess.run(cmd, capture_output=True, timeout=600)  # 10분 상한
+    except subprocess.TimeoutExpired:
+        fname = Path(clip.get("filepath", "?")).name
+        print(f"\n  [오류] 클립 인코딩 타임아웃 (10분 초과): {fname}")
+        return False
     finally:
         if sem:
             sem.release()
