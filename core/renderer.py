@@ -278,9 +278,9 @@ def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int], out_fps
     loc_path = clip.get("loc_path")
     sub_path = clip.get("sub_path")
     if loc_path and Path(loc_path).exists():
-        vf += f",ass='{_esc_path(loc_path)}'"
+        vf += f',ass="{_esc_path(loc_path)}"'
     if sub_path and Path(sub_path).exists():
-        vf += f",ass='{_esc_path(sub_path)}'"
+        vf += f',ass="{_esc_path(sub_path)}"'
 
     encode_args = [
         "-vf", vf,
@@ -449,6 +449,9 @@ def is_valid_video(path: str) -> bool:
 
 
 def _esc_path(path: str) -> str:
-    """ffmpeg filter 경로 이스케이프.
-    단일 따옴표로 감싸진 값 안에서 ' 자체는 '\'' (종료→리터럴→재시작) 패턴으로 처리."""
-    return path.replace("\\", "/").replace(":", "\\:").replace("'", "'\\''")
+    """ffmpeg filter 경로 이스케이프 (subprocess, no shell).
+    이중 따옴표로 감싸진 값 안에서 사용: f',ass="{_esc_path(p)}"'
+    이중 따옴표 내부에서 이스케이프 필요한 문자: \ → /, " → \\"
+    아포스트로피(')나 공백은 이중 따옴표 내에서 그대로 사용 가능.
+    """
+    return path.replace("\\", "/").replace('"', '\\"')
