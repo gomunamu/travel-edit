@@ -838,20 +838,18 @@ def run(input_folder: str, output_folder: str):
         release_model_pool()   # GPU 메모리 해제 → 렌더링에서 활용 가능
 
         # 4-b. STT 정제
-        _refine_keys = [
-            k for k, v in [
-                ("Claude",  _config.ANTHROPIC_API_KEY),
-                ("OpenAI",  _config.OPENAI_API_KEY),
-                ("Gemini",  _config.GEMINI_API_KEY),
-            ] if v
-        ]
-        if _config.STT_REFINE and _refine_keys:
-            _refine_label = " → ".join(_refine_keys)
+        if _config.STT_REFINE:
+            _refine_keys = [
+                k for k, v in [
+                    ("Claude",  _config.ANTHROPIC_API_KEY),
+                    ("OpenAI",  _config.OPENAI_API_KEY),
+                    ("Gemini",  _config.GEMINI_API_KEY),
+                ] if v
+            ]
+            _refine_label = " → ".join(_refine_keys + ["CPU(반복제거)"])
             print(f"\n[4-b] STT 정제 (폴백 체인: {_refine_label})...")
             transcripts = refine_all(segments, transcripts, cache)
             _token_tracker.print_current("4-b STT 정제 후")
-        elif _config.STT_REFINE:
-            print("\n[4-b] STT 정제 건너뜀 (API 키 없음: ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY)")
 
         # 4-c. 자막 / 위치 미리보기
         print("\n[4-c] 자막 미리보기 (최종):")

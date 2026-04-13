@@ -184,7 +184,8 @@ def refine_transcript(
     )
 
     if corrected is None:
-        return transcript  # 모든 API 실패 → 원본 반환
+        # CPU 폴백: LLM 없이 반복 제거만 적용
+        corrected = texts  # remove_repetitions는 이미 texts 생성 시 적용됨
 
     refined = dict(transcript)
     refined["segments"] = [
