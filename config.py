@@ -116,21 +116,44 @@ WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
 SUBTITLE_LANG = os.environ.get("SUBTITLE_LANG", "auto")    # auto|ko|en|ja|zh|off
 SUBTITLE_MODE = os.environ.get("SUBTITLE_MODE", "overlay") # overlay|srt
 
+# === 모델 별칭 (단축명 → 현재 모델 ID) ===
+# 모델이 폐기될 때 이 테이블만 업데이트하면 됩니다.
+# .env / 환경변수에서 단축명(예: CLAUDE_MODEL=haiku)도 지원합니다.
+_MODEL_ALIASES: dict = {
+    # Anthropic
+    "haiku":     "claude-haiku-4-5-20251001",
+    "sonnet":    "claude-sonnet-4-6",
+    "opus":      "claude-opus-4-6",
+    # OpenAI
+    "mini":      "gpt-4o-mini",
+    "4o-mini":   "gpt-4o-mini",
+    # Gemini
+    "flash":     "gemini-2.5-flash",
+    "2.5-flash": "gemini-2.5-flash",
+    "2.0-flash": "gemini-2.0-flash",
+}
+
+def _resolve_model(name: str) -> str:
+    """단축 별칭을 실제 모델 ID로 변환. 알 수 없으면 원본 반환."""
+    return _MODEL_ALIASES.get(name.strip().lower(), name.strip())
+
+
 # === Claude AI 설정 ===
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+CLAUDE_MODEL = _resolve_model(os.environ.get("CLAUDE_MODEL", "haiku"))
 CLAUDE_MAX_CONCURRENT = int(os.environ.get("EVAL_WORKERS", "5"))  # 동시 AI 평가 수
 
 # === STT 정제 설정 ===
 # Whisper 결과를 LLM으로 한 번 더 정제 (외부 소음/한국어 오인식 보정)
+# 폴백 체인: Claude(Anthropic) → OpenAI → Gemini
 STT_REFINE = os.environ.get("STT_REFINE", "true").lower() not in ("0", "false", "off")
-STT_REFINE_MODEL = os.environ.get("STT_REFINE_MODEL", "claude-haiku-4-5-20251001")
+STT_REFINE_MODEL = _resolve_model(os.environ.get("STT_REFINE_MODEL", "haiku"))
 
 # === OpenAI / Gemini 설정 (rate limit 시 라운드로빈 폴백) ===
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_MODEL   = os.environ.get("OPENAI_MODEL",   "gpt-4o-mini")
+OPENAI_MODEL   = _resolve_model(os.environ.get("OPENAI_MODEL", "mini"))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL   = os.environ.get("GEMINI_MODEL",   "gemini-2.5-flash")
+GEMINI_MODEL   = _resolve_model(os.environ.get("GEMINI_MODEL", "flash"))
 
 # === 방향 분리 설정 ===
 # 가로/세로 영상을 별도 파일로 출력 (세로: travel_YYYY-MM-DD_vertical.mp4)

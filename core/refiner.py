@@ -1,8 +1,15 @@
-"""LLM 기반 STT 결과 정제 (한국어 오인식·외부 소음 보정)"""
+"""LLM 기반 STT 결과 정제 (한국어 오인식·외부 소음 보정)
+폴백 체인: Claude (Anthropic) → OpenAI → Gemini → 원본 반환
+"""
 import json
 import re
 from typing import Optional
 
+from config import (
+    ANTHROPIC_API_KEY, STT_REFINE_MODEL,
+    OPENAI_API_KEY, OPENAI_MODEL,
+    GEMINI_API_KEY, GEMINI_MODEL,
+)
 from core.token_tracker import tracker as _tracker
 
 
@@ -62,14 +69,96 @@ def remove_repetitions(text: str, threshold: int = 4) -> str:
     return text.strip()
 
 
+def _build_messages(texts: list, system: str) -> tuple:
+    """(system_prompt, user_content) 반환."""
+    user_content = f"다음 STT 텍스트를 교정하세요:\n{json.dumps(texts, ensure_ascii=False)}"
+    return system, user_content
+
+
+def _parse_corrected(raw: str, expected_len: int) -> Optional[list]:
+    """LLM 응답에서 JSON 배열 파싱. 개수 불일치 시 None."""
+    try:
+        corrected = json.loads(raw)
+        if isinstance(corrected, list) and len(corrected) == expected_len:
+            return corrected
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return None
+
+
+def _call_claude(texts: list, system: str) -> Optional[list]:
+    if not ANTHROPIC_API_KEY:
+        return None
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        _, user_content = _build_messages(texts, system)
+        message = client.messages.create(
+            model=STT_REFINE_MODEL,
+            max_tokens=4096,
+            system=system,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        _tracker.record("Anthropic", STT_REFINE_MODEL,
+                        message.usage.input_tokens, message.usage.output_tokens)
+        return _parse_corrected(message.content[0].text.strip(), len(texts))
+    except Exception:
+        return None
+
+
+def _call_openai(texts: list, system: str) -> Optional[list]:
+    if not OPENAI_API_KEY:
+        return None
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        _, user_content = _build_messages(texts, system)
+        msg = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            max_tokens=4096,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user_content},
+            ],
+        )
+        _tracker.record("OpenAI", OPENAI_MODEL,
+                        msg.usage.prompt_tokens, msg.usage.completion_tokens)
+        return _parse_corrected(msg.choices[0].message.content.strip(), len(texts))
+    except Exception:
+        return None
+
+
+def _call_gemini(texts: list, system: str) -> Optional[list]:
+    if not GEMINI_API_KEY:
+        return None
+    try:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        _, user_content = _build_messages(texts, system)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=user_content,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=4096,
+            ),
+        )
+        meta = response.usage_metadata
+        _tracker.record("Gemini", GEMINI_MODEL,
+                        meta.prompt_token_count, meta.candidates_token_count)
+        return _parse_corrected(response.text, len(texts))
+    except Exception:
+        return None
+
+
 def refine_transcript(
     transcript: dict,
-    api_key: str,
-    model: str,
     location_hints: Optional[list] = None,
 ) -> dict:
     """
     transcript의 segments 텍스트를 LLM으로 정제한다.
+    폴백 체인: Claude → OpenAI → Gemini. 모두 실패 시 원본 반환.
     has_speech=False 또는 segments가 없으면 원본 그대로 반환.
     location_hints: GPS에서 추출한 지역명 목록 (국가 제외). 지명 오인식 교정에 활용.
     """
@@ -82,41 +171,23 @@ def refine_transcript(
     if not any(texts):
         return transcript
 
-    # 지역명 힌트가 있으면 system prompt에 추가
     system = _SYSTEM_PROMPT
     if location_hints:
         system += _LOCATION_HINT_TEMPLATE.format(
             locations=", ".join(location_hints)
         )
 
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model=model,
-            max_tokens=4096,
-            system=system,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"다음 STT 텍스트를 교정하세요:\n{json.dumps(texts, ensure_ascii=False)}",
-                }
-            ],
-        )
-        _tracker.record("Anthropic", model,
-                        message.usage.input_tokens, message.usage.output_tokens)
-        raw = message.content[0].text.strip()
+    corrected = (
+        _call_claude(texts, system)
+        or _call_openai(texts, system)
+        or _call_gemini(texts, system)
+    )
 
-        # JSON 배열 파싱
-        corrected = json.loads(raw)
-        if not isinstance(corrected, list) or len(corrected) != len(segments):
-            return transcript  # 파싱 실패 시 원본 반환
+    if corrected is None:
+        return transcript  # 모든 API 실패 → 원본 반환
 
-        refined = dict(transcript)
-        refined["segments"] = [
-            dict(seg, text=corrected[i]) for i, seg in enumerate(segments)
-        ]
-        return refined
-
-    except Exception:
-        return transcript  # 오류 시 원본 반환
+    refined = dict(transcript)
+    refined["segments"] = [
+        dict(seg, text=corrected[i]) for i, seg in enumerate(segments)
+    ]
+    return refined

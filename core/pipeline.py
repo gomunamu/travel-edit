@@ -239,10 +239,11 @@ def refine_all(
     cache: Cache,
 ) -> Dict[str, dict]:
     """
-    Whisper 결과를 Claude로 한 번 더 정제한다.
+    Whisper 결과를 LLM으로 한 번 더 정제한다.
+    폴백 체인: Claude → OpenAI → Gemini.
     캐시 키: STT_REFINE_MODEL이 바뀌면 재정제.
     """
-    from config import ANTHROPIC_API_KEY, STT_REFINE_MODEL, CLAUDE_MAX_CONCURRENT
+    from config import STT_REFINE_MODEL, CLAUDE_MAX_CONCURRENT
 
     # 캐시 키: 정제 모델이 바뀌면 새 슬롯 사용
     _r_suffix = "transcript_refined_" + variant_tag(STT_REFINE_MODEL)
@@ -282,8 +283,7 @@ def refine_all(
             hints = get_location_hints(float(gps[0]), float(gps[1]))
         try:
             with semaphore:
-                result = refine_transcript(original, ANTHROPIC_API_KEY, STT_REFINE_MODEL,
-                                           location_hints=hints or None)
+                result = refine_transcript(original, location_hints=hints or None)
         except Exception as e:
             print(f"\n  [경고] STT 정제 실패 ({Path(seg['filepath']).name}): {e}")
             result = original  # 실패해도 원본으로 캐시 저장 → 재실행 시 재시도 안 함
@@ -838,12 +838,20 @@ def run(input_folder: str, output_folder: str):
         release_model_pool()   # GPU 메모리 해제 → 렌더링에서 활용 가능
 
         # 4-b. STT 정제
-        if _config.STT_REFINE and _config.ANTHROPIC_API_KEY:
-            print(f"\n[4-b] STT 정제 (LLM: {_config.STT_REFINE_MODEL})...")
+        _refine_keys = [
+            k for k, v in [
+                ("Claude",  _config.ANTHROPIC_API_KEY),
+                ("OpenAI",  _config.OPENAI_API_KEY),
+                ("Gemini",  _config.GEMINI_API_KEY),
+            ] if v
+        ]
+        if _config.STT_REFINE and _refine_keys:
+            _refine_label = " → ".join(_refine_keys)
+            print(f"\n[4-b] STT 정제 (폴백 체인: {_refine_label})...")
             transcripts = refine_all(segments, transcripts, cache)
             _token_tracker.print_current("4-b STT 정제 후")
-        elif _config.STT_REFINE and not _config.ANTHROPIC_API_KEY:
-            print("\n[4-b] STT 정제 건너뜀 (ANTHROPIC_API_KEY 없음)")
+        elif _config.STT_REFINE:
+            print("\n[4-b] STT 정제 건너뜀 (API 키 없음: ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY)")
 
         # 4-c. 자막 / 위치 미리보기
         print("\n[4-c] 자막 미리보기 (최종):")
