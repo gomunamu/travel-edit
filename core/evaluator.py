@@ -58,9 +58,11 @@ _STYLE_GUIDE = {
     ),
     "scene-long": (
         "풍경·자연·분위기 클립을 최대한 살리는 것이 이 스타일의 목적입니다. "
-        "무음 풍경은 기본적으로 keep 또는 trim이며, discard는 화질 불량·심한 흔들림에만 사용하세요. "
+        "무음 풍경은 기본적으로 keep 또는 trim이며, "
+        "discard는 오직 심한 흔들림·초점 불량·렌즈 가림처럼 화질 자체가 불량한 경우에만 사용합니다. "
+        "【중요】음성이 없다는 이유만으로 절대 discard를 내리지 마세요. "
         "{max_keep}초가 넘는 클립은 앞뒤를 트림해 {max_keep}초로 맞추되, 버리지는 마세요. "
-        "음성 유무는 평가에 영향을 주지 않습니다."
+        "음성 유무는 결정에 영향을 주지 않습니다."
     ),
     "highlight": (
         "최고 품질의 클립만 엄선하세요. "
@@ -78,9 +80,10 @@ _STYLE_GUIDE = {
 # 스타일별 규칙 1 (무음 풍경 처리 방침이 스타일마다 반대이므로 분리)
 _RULE1 = {
     "scene-long": (
-        "음성 없는 풍경·자연·분위기 클립 → 기본적으로 **keep**. "
+        "음성 없는 풍경·자연·분위기 클립 → 기본적으로 **keep** (음성 없음은 discard 사유 아님). "
         "{max_keep}초 초과 시 {max_keep}초로 트림. "
-        "discard는 심한 흔들림·초점 불량·완전히 무의미한 장면(주차장·발바닥·렌즈 가림 등)에만 한정."
+        "discard 허용 사유: 심한 흔들림 / 심각한 초점 불량 / 렌즈 가림 / 완전히 무의미한 장면(주차장 바닥·발바닥 등). "
+        "단순히 '음성이 없다', '지루할 수 있다', '장소감이 부족하다'는 discard 사유로 인정하지 않습니다."
     ),
     "scene-short": (
         "음성 없는 풍경 → 핵심 구간만 남겨 최대 {max_keep}초로 트림. "
@@ -309,7 +312,7 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
             result, rate_limited = caller(prompt, duration, system=system)
             if result is not None:
                 _adaptive.on_success()
-                return result
+                return _scene_override(result, has_speech, duration)
             if rate_limited:
                 _adaptive.on_rate_limit()
                 _on_api_fail(name)
@@ -319,6 +322,27 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
 
         _adaptive.on_success()
         return _rule_based_eval(duration, has_speech, speech_sec)
+
+
+def _scene_override(result: dict, has_speech: bool, duration: float) -> dict:
+    """scene 스타일에서 LLM이 무음 클립에 discard를 내리면 trim으로 교정한다.
+    프롬프트 지시를 LLM이 무시하는 경우에 대한 안전망."""
+    if EDIT_STYLE not in ("scene-long", "scene-short"):
+        return result
+    if result.get("decision") != "discard":
+        return result
+    if has_speech:
+        return result  # 음성 있는 클립은 LLM 판단 존중
+    # 무음 클립을 discard → trim으로 교정
+    max_keep = float(STYLE_MAX_LANDSCAPE)
+    keep_end = min(max_keep, duration)
+    return {
+        **result,
+        "decision":   "trim",
+        "keep_start": 0.0,
+        "keep_end":   keep_end,
+        "reason":     "(scene 스타일 보정) " + result.get("reason", ""),
+    }
 
 
 # ─── 공통: 프롬프트 sanitize ─────────────────────────────────────────────────
