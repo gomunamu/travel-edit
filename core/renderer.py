@@ -195,13 +195,14 @@ def render_day_onepass(
     """
     n = len(clips_info)
     workers = _worker_count(out_res)
-    out_dir = Path(output_path).parent
     stem = Path(output_path).stem
 
     print(f"  병렬 렌더링: {n}개 클립 / 워커 {workers}개 (cpu={os.cpu_count()})")
 
-    # 순서 보장을 위해 인덱스 기반 임시 경로 사전 할당
-    temp_paths = [str(out_dir / f".{stem}_clip{i:04d}.mp4") for i in range(n)]
+    # 임시 클립을 /tmp/ 아래에 생성 — 출력 경로에 아포스트로피/공백 등 특수문자가
+    # 있어도 FFmpeg concat 파서가 경로를 안전하게 읽을 수 있다.
+    tmp_dir = Path(tempfile.mkdtemp(prefix="_tve_render_"))
+    temp_paths = [str(tmp_dir / f"{stem}_clip{i:04d}.mp4") for i in range(n)]
 
     if HAS_TQDM:
         pbar = _tqdm_cls(total=n, desc="  렌더링", unit="클립")
@@ -249,11 +250,19 @@ def render_day_onepass(
     if not all(success.get(i, False) for i in range(n)):
         for p in temp_paths:
             Path(p).unlink(missing_ok=True)
+        try:
+            tmp_dir.rmdir()
+        except OSError:
+            pass
         return False
 
     # 클립 1개면 rename만
     if n == 1:
         Path(temp_paths[0]).rename(output_path)
+        try:
+            tmp_dir.rmdir()
+        except OSError:
+            pass
         return True
 
     total_sec = sum(
@@ -263,6 +272,10 @@ def render_day_onepass(
     ok = _concat_clips(temp_paths, output_path, total_sec)
     for p in temp_paths:
         Path(p).unlink(missing_ok=True)
+    try:
+        tmp_dir.rmdir()
+    except OSError:
+        pass
     return ok
 
 
@@ -363,8 +376,8 @@ def _concat_clips(clip_paths: List[str], output_path: str, total_sec: float = 0.
                                     delete=False, encoding="utf-8") as f:
         concat_file = f.name
         for p in clip_paths:
-            escaped = os.path.abspath(p).replace("\\", "/").replace("'", "\\'")
-            f.write(f"file '{escaped}'\n")
+            # 임시 클립 경로는 /tmp/_tve_render_*/ 아래 — 특수문자 없음
+            f.write(f"file '{os.path.abspath(p)}'\n")
 
     r_fd, w_fd = os.pipe()
     cmd = [
