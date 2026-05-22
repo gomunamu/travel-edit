@@ -1,5 +1,11 @@
 # Travel Video Editor
 
+[한국어](#한국어) | [English](#english)
+
+---
+
+<a name="한국어"></a>
+
 여행 동영상을 AI가 VLOG 형식으로 자동으로 편집해주는 도구입니다.  
 입력 폴더의 동영상을 분석해 날짜별로 컷 편집, (음성인식)자막 생성, 장소 표시까지 자동으로 처리합니다.
 
@@ -16,6 +22,50 @@
 - **병렬 렌더링** — 멀티코어 병렬 렌더링으로 빠른 처리
 - **AI 폴백** — Claude → OpenAI → Gemini 순서로 rate limit 시 자동 전환, 소스 파일 단위로 API 상태 리셋
 - **토큰 사용량 추적** — Anthropic / OpenAI / Gemini 각각 토큰·비용 집계
+
+## 하드웨어 권장 사양
+
+이 도구는 **GPU 유무에 따라 처리 속도 차이가 매우 큽니다.**  
+GPU 없이도 동작하지만, 4K 영상 기준 인코딩 속도가 10~30배 차이납니다.
+
+### GPU (NVIDIA CUDA) — 권장
+
+NVIDIA GPU는 두 가지 작업을 가속합니다.
+
+| 작업 | GPU 가속 방식 | 효과 |
+|------|-------------|------|
+| **음성 인식 (Whisper)** | CUDA 추론 | CPU 대비 5~10배 빠름 |
+| **영상 인코딩 (FFmpeg)** | NVENC 하드웨어 인코더 | 4K 기준 CPU 대비 **10~30배** 빠름 |
+
+**4K 영상 인코딩 속도 비교:**
+
+| 모드 | 처리 속도 | 28코어 기준 병렬 워커 |
+|------|----------|-------------------|
+| GPU (NVENC+NVDEC) | 150~200 fps | 14개 |
+| CPU (libx265) | 5~15 fps | 3개 |
+
+- NVIDIA RTX / GTX 계열이면 모두 NVENC 지원
+- `USE_NVENC=auto` (기본값)로 설정하면 GPU가 있을 때 자동으로 활성화됨
+- GeForce 소비자용 GPU는 NVENC 동시 세션이 **3개로 하드웨어 제한** (Quadro / RTX A시리즈는 무제한)
+
+### CPU 전용 — 가능하지만 느림
+
+- `./install.sh --cpu-only` 로 설치
+- Whisper는 CPU 추론으로 동작 (`WHISPER_DEVICE=cpu`)
+- 인코딩은 libx264/libx265 소프트웨어 인코더 사용
+- 짧은 여행 영상(FHD 이하)은 CPU로도 현실적인 시간 내 처리 가능
+
+### 최소/권장 사양 요약
+
+| | 최소 | 권장 |
+|-|------|------|
+| **GPU** | 없음 (CPU 전용) | NVIDIA RTX 3060 이상 |
+| **VRAM** | — | 8GB 이상 (large-v3 Whisper 모델 기준) |
+| **RAM** | 8GB | 16GB 이상 |
+| **CPU** | 4코어 | 8코어 이상 |
+| **OS** | macOS / Ubuntu 22.04 | Ubuntu 22.04 (NVENC 지원) |
+
+> macOS는 NVENC를 지원하지 않아 CPU 인코딩만 가능합니다. Whisper는 MPS(Apple Silicon) 또는 CPU로 동작합니다.
 
 ## 요구사항
 
@@ -425,4 +475,212 @@ python main.py <입력폴더> <출력폴더>
 
 ```
 [경고] Gemini 평가 실패: cannot import name 'genai' from 'google'
+```
+
+---
+
+<a name="english"></a>
+
+# Travel Video Editor — English Guide
+
+An AI-powered tool that automatically edits travel videos into a vlog format.  
+It analyzes videos in an input folder and handles cut editing by date, subtitle generation via speech recognition, and location overlays — all automatically.
+
+## Features
+
+- **Automatic Cut Editing** — Removes short/unnecessary clips; splits long clips automatically
+- **AI Clip Scoring** — Claude AI scores each clip 0–100 across 4 sub-categories (visual, speech, scene, flow)
+- **Subtitle Generation** — Whisper speech recognition with 1-line display; burned into video or exported as SRT
+- **LLM Subtitle Refinement** — Whisper output post-corrected by an LLM to fix foreign words and noise misrecognitions
+- **Multi-language Subtitles** — Auto-detects Korean/English; Japanese and Chinese can be specified manually
+- **Location Overlay** — Displays shooting location (City, Country) in the bottom-right corner from GPS metadata
+- **Auto Resolution** — Selects output resolution from the highest-resolution source clip (4K / 1440p / FHD / 720p)
+- **Date-based Output** — Classifies and merges videos by shooting date
+- **Parallel Rendering** — Multi-core parallel rendering for fast processing
+- **AI Fallback** — Automatically switches Claude → OpenAI → Gemini on rate limits
+- **Token Usage Tracking** — Aggregates token counts and costs for Anthropic / OpenAI / Gemini
+
+## Hardware Requirements
+
+This tool is **heavily GPU-dependent**. It works without a GPU, but encoding speed can be 10–30× slower for 4K footage.
+
+### GPU (NVIDIA CUDA) — Recommended
+
+An NVIDIA GPU accelerates two key workloads:
+
+| Workload | GPU acceleration | Speedup |
+|----------|-----------------|---------|
+| **Speech recognition (Whisper)** | CUDA inference | 5–10× faster than CPU |
+| **Video encoding (FFmpeg)** | NVENC hardware encoder | **10–30× faster** than CPU (4K) |
+
+**4K encoding speed comparison:**
+
+| Mode | Speed | Parallel workers (28-core CPU) |
+|------|-------|-------------------------------|
+| GPU (NVENC + NVDEC) | 150–200 fps | 14 |
+| CPU (libx265) | 5–15 fps | 3 |
+
+- Any NVIDIA RTX / GTX GPU supports NVENC
+- `USE_NVENC=auto` (default) enables GPU encoding automatically when a GPU is detected
+- Consumer GeForce GPUs are **hardware-limited to 3 concurrent NVENC sessions** (Quadro / RTX A-series: unlimited)
+
+### CPU-only — Supported but Slow
+
+- Install with `./install.sh --cpu-only`
+- Whisper runs on CPU (`WHISPER_DEVICE=cpu`)
+- Encoding uses software libx264/libx265
+- Practical for short trips or FHD footage; 4K will be significantly slower
+
+### Minimum / Recommended Specs
+
+| | Minimum | Recommended |
+|-|---------|-------------|
+| **GPU** | None (CPU-only) | NVIDIA RTX 3060 or better |
+| **VRAM** | — | 8 GB+ (for Whisper large-v3) |
+| **RAM** | 8 GB | 16 GB+ |
+| **CPU** | 4 cores | 8 cores+ |
+| **OS** | macOS / Ubuntu 22.04 | Ubuntu 22.04 (full NVENC support) |
+
+> macOS does not support NVENC. Whisper runs on MPS (Apple Silicon) or CPU.
+
+## Installation
+
+```bash
+# Clone the repo and run the install script
+./install.sh                     # Default (PyTorch CUDA 12.8)
+./install.sh --torch-cuda=cu124  # CUDA 12.4 wheel
+./install.sh --cpu-only          # No GPU
+./install.sh --skip-torch        # PyTorch already installed
+```
+
+**Copy and fill in the environment file:**
+
+```bash
+cp core/.env.example core/.env
+# Edit core/.env and set at least ANTHROPIC_API_KEY
+```
+
+## Usage
+
+```bash
+python main.py <input_folder> <output_folder> [options]
+```
+
+### Examples
+
+```bash
+# Basic run (auto language detection, auto resolution, burned-in subtitles)
+python main.py ~/travel ~/output
+
+# Rule-based only, no AI
+python main.py /media/usb/DCIM ./output --no-ai
+
+# Japanese subtitles, burned into video
+python main.py ./videos ./output --subtitle-lang ja
+
+# Korean subtitles as separate SRT file
+python main.py ./videos ./output --subtitle-lang ko --subtitle-mode srt
+
+# No subtitles (fastest)
+python main.py ./videos ./output --subtitle-lang off
+
+# Force FHD output
+python main.py ./videos ./output --resolution fhd
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--no-ai` | Rule-based clip evaluation only, skip Claude AI |
+| `--whisper-model` | Whisper model (`tiny` / `base` / `small` / `medium` / `large-v2` / `large-v3`) |
+| `--subtitle-lang` | Subtitle language (`auto` / `ko` / `en` / `ja` / `zh` / `off`, default: `auto`) |
+| `--subtitle-mode` | Subtitle mode (`overlay`=burned in / `srt`=separate file, default: `overlay`) |
+| `--resolution` | Output resolution (`auto` / `4k` / `1440p` / `fhd` / `720p`, default: `auto`) |
+| `--style` | Editing style (see below, default: `balanced`) |
+| `--min-day-duration N` | Minimum minutes per day; fills from discarded clips if under target |
+| `--split-orientation` | Output landscape and portrait as separate files |
+| `--max-segment N` | Max clip length in seconds before auto-split (default: 30) |
+| `--workers N` | Number of parallel rendering workers |
+| `--skip-transcribe` | Skip speech recognition (same as `--subtitle-lang off`) |
+| `--no-stt-refine` | Disable LLM subtitle refinement |
+| `--archive-dir DIR` | Move finished mp4 files to this directory after rendering |
+
+### Editing Styles (`--style`)
+
+Styles change both the AI persona and the evaluation criteria for silent/landscape clips.
+
+| Style | AI persona | Silent landscape clips | Max kept |
+|-------|-----------|----------------------|----------|
+| `balanced` | Travel vlog producer | Trim if long, keep if short | 10s |
+| `voice` | Travel vlog producer | **Remove all** | — |
+| `vlog` | Travel vlog producer | Keep short transition cuts (≤5s) | 5s |
+| `scene-short` | Travel video editor | Keep only key segments (trimmed) | 10s |
+| `scene-long` | **Travel documentary director** | **Keep by default** (remove only bad quality) | 30s |
+| `highlight` | Travel vlog producer | Keep only top-scoring clips | 8s |
+
+```bash
+python main.py ./videos ./output --style scene-long   # landscape / nature focus
+python main.py ./videos ./output --style vlog         # talking-head focus
+python main.py ./videos ./output --style highlight    # highlight reel
+```
+
+## Environment Variables / `.env`
+
+Copy `core/.env.example` to `core/.env` and configure:
+
+```env
+# API keys (at least one required for AI features)
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...          # Optional — fallback when Claude rate-limits
+GEMINI_API_KEY=...             # Optional — fallback when OpenAI rate-limits
+
+# Whisper
+WHISPER_MODEL=large-v3         # tiny | base | small | medium | large-v3
+WHISPER_DEVICE=cuda            # cuda | cpu
+WHISPER_COMPUTE_TYPE=int8
+
+# Subtitles
+SUBTITLE_LANG=auto             # auto | ko | en | ja | zh | off
+SUBTITLE_MODE=overlay          # overlay | srt
+
+# Output
+OUTPUT_RESOLUTION=auto         # auto | 4k | 1440p | fhd | 720p
+VIDEO_CODEC=h265               # h264 | h265
+CRF=24
+FFMPEG_PRESET=medium           # ultrafast | fast | medium | slow
+
+# GPU encoding (NVENC)
+USE_NVENC=auto                 # auto | true | false
+NVENC_PRESET=p4                # p1 (fastest) ~ p7 (best quality)
+NVENC_MAX_SESSIONS=3           # 3 for GeForce; increase for Quadro / RTX A-series
+
+# Editing
+EDIT_STYLE=balanced
+```
+
+Without `ANTHROPIC_API_KEY`, clip evaluation falls back to rule-based scoring automatically.  
+`.env` is listed in `.gitignore` and will never be committed.
+
+## AI Clip Scoring
+
+Claude AI scores each clip from 0 to 100 across four categories:
+
+| Category | Description |
+|----------|-------------|
+| **Visual** | Recording quality — sharpness, shake, exposure |
+| **Speech** | Voice clarity and background noise |
+| **Scene** | Interest level of the scenery or content |
+| **Flow** | Whether the clip is necessary for editing continuity |
+
+Clips with low scores are automatically removed. A 2–3 sentence reason is printed for each clip.
+
+## Output Structure
+
+```
+output/
+├── travel_2024-07-15.mp4     # Final edited video per day
+├── travel_2024-07-15.srt     # Subtitle file (SRT mode only)
+├── .cache/                   # Intermediate files (reused on re-run)
+└── rendered/                 # Rendered clips per day
 ```
