@@ -1,11 +1,14 @@
 """faster-whisper 기반 음성 인식 (한국어/영어 자동 감지)"""
 import os
+import platform
 import queue
 import subprocess
 import tempfile
 import threading
 from pathlib import Path
 from typing import Optional
+
+_IS_MACOS = platform.system() == "Darwin"
 
 from config import WHISPER_MODEL, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE
 
@@ -34,8 +37,18 @@ def _load_one_model():
     compute = WHISPER_COMPUTE_TYPE
     model_name = _resolve_model_name(WHISPER_MODEL)
 
-    if device == "cuda":
-        if ctranslate2.get_cuda_device_count() == 0:
+    # MPS: ctranslate2가 Apple MPS를 미지원 → CPU로 전환
+    if device == "mps":
+        print("  [정보] ctranslate2는 MPS 미지원 → CPU로 전환")
+        device = "cpu"
+        compute = "int8"
+    elif device == "cuda":
+        if _IS_MACOS:
+            # macOS에서 cuda 강제 지정 시에도 CPU로 전환
+            print("  [정보] macOS에서 CUDA 미지원 → CPU로 전환")
+            device = "cpu"
+            compute = "int8"
+        elif ctranslate2.get_cuda_device_count() == 0:
             print("  [경고] CUDA 장치 없음, CPU로 전환")
             device = "cpu"
             compute = "int8"

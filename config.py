@@ -1,5 +1,8 @@
 import os
+import platform as _platform
 from pathlib import Path
+
+_IS_MACOS = _platform.system() == "Darwin"
 
 # .env 파일 로드 — core/.env 단일 관리 (python-dotenv 없이 직접 파싱)
 _env_path = Path(__file__).parent / "core" / ".env"
@@ -92,8 +95,16 @@ NVENC_PRESET = os.environ.get("NVENC_PRESET", "p4")
 # .env: NVENC_MAX_SESSIONS=3
 NVENC_MAX_SESSIONS = int(os.environ.get("NVENC_MAX_SESSIONS", "3"))
 
+# VideoToolbox: macOS 하드웨어 인코딩 (Apple Silicon / Intel Mac)
+# .env: USE_VIDEOTOOLBOX=auto (기본) | true | false
+# NVENC와 달리 CRF 미지원 → -q:v 사용 (1=최고화질 ~ 100=최저화질)
+USE_VIDEOTOOLBOX = os.environ.get("USE_VIDEOTOOLBOX", "auto").strip().lower()
+VIDEOTOOLBOX_MAX_SESSIONS = int(os.environ.get("VIDEOTOOLBOX_MAX_SESSIONS", "2"))
+VIDEOTOOLBOX_QUALITY = int(os.environ.get("VIDEOTOOLBOX_QUALITY", "50"))
+
 # === 자막 설정 ===
-SUBTITLE_FONT = "Arial"            # 한글 지원 폰트: NanumGothic, Malgun Gothic 등
+_default_subtitle_font = "Apple SD Gothic Neo" if _IS_MACOS else "NanumGothic"
+SUBTITLE_FONT = os.environ.get("SUBTITLE_FONT", _default_subtitle_font)
 SUBTITLE_FONT_SIZE = 52
 SUBTITLE_MARGIN_V = 40             # 하단 여백(px)
 
@@ -109,7 +120,8 @@ LOCATION_MARGIN = 20               # 우하단 여백(px)
 #              (영어 전용, 표준 대비 약 2배 빠름, 정확도 소폭 낮음)
 # .env: WHISPER_MODEL=distil-large-v3
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "large-v3")
-WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cuda")
+_default_whisper_device = "cpu" if _IS_MACOS else "cuda"
+WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", _default_whisper_device)
 WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
 
 # === 자막 설정 (언어/방식) ===

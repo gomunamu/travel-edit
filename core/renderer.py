@@ -2,6 +2,7 @@
 import atexit
 import hashlib
 import os
+import platform
 import subprocess
 import tempfile
 import threading
@@ -9,7 +10,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Tuple, Optional
 
-from config import CRF, FFMPEG_PRESET, RENDER_WORKERS, VIDEO_CODEC, USE_NVENC, NVENC_PRESET, NVENC_MAX_SESSIONS
+from config import (CRF, FFMPEG_PRESET, RENDER_WORKERS, VIDEO_CODEC,
+                    USE_NVENC, NVENC_PRESET, NVENC_MAX_SESSIONS,
+                    USE_VIDEOTOOLBOX, VIDEOTOOLBOX_MAX_SESSIONS, VIDEOTOOLBOX_QUALITY)
+
+_IS_MACOS = platform.system() == "Darwin"
 
 try:
     from tqdm import tqdm as _tqdm_cls
@@ -38,13 +43,14 @@ _nvenc_semaphore: Optional[threading.Semaphore] = None  # 동시 세션 제한
 
 def _use_nvenc() -> bool:
     global _NVENC_AVAILABLE, _nvenc_semaphore
+    if _IS_MACOS:
+        return False  # macOS에서는 NVENC 불가
     if USE_NVENC == "false":
         return False
     if USE_NVENC == "true":
         if _nvenc_semaphore is None:
             _nvenc_semaphore = threading.Semaphore(NVENC_MAX_SESSIONS)
-        return True  # 사용자가 강제 활성화
-    # auto: 처음 호출 시 한 번만 감지
+        return True
     if _NVENC_AVAILABLE is None:
         _NVENC_AVAILABLE = _detect_nvenc()
         if _NVENC_AVAILABLE:
@@ -66,12 +72,62 @@ def _is_nvenc_session_error(stderr: str) -> bool:
     ))
 
 
+# ── VideoToolbox (macOS) ─────────────────────────────────────────────────────
+
+def _detect_videotoolbox() -> bool:
+    """ffmpeg에서 h264_videotoolbox 사용 가능 여부 확인."""
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-f", "lavfi", "-i", "nullsrc=s=256x256:d=0.1",
+             "-c:v", "h264_videotoolbox", "-f", "null", "-"],
+            capture_output=True, timeout=10,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+_VT_AVAILABLE: Optional[bool] = None
+_vt_semaphore: Optional[threading.Semaphore] = None
+
+
+def _use_videotoolbox() -> bool:
+    global _VT_AVAILABLE, _vt_semaphore
+    if not _IS_MACOS:
+        return False
+    if USE_VIDEOTOOLBOX == "false":
+        return False
+    if USE_VIDEOTOOLBOX == "true":
+        if _vt_semaphore is None:
+            _vt_semaphore = threading.Semaphore(VIDEOTOOLBOX_MAX_SESSIONS)
+        return True
+    if _VT_AVAILABLE is None:
+        _VT_AVAILABLE = _detect_videotoolbox()
+        if _VT_AVAILABLE:
+            _vt_semaphore = threading.Semaphore(VIDEOTOOLBOX_MAX_SESSIONS)
+            print(f"  [VideoToolbox] GPU 하드웨어 인코딩 활성화 (동시 세션 최대 {VIDEOTOOLBOX_MAX_SESSIONS}개)")
+        else:
+            print("  [VideoToolbox] GPU 인코딩 불가 → CPU 인코딩 사용")
+    return bool(_VT_AVAILABLE)
+
+
+def _is_vt_session_error(stderr: str) -> bool:
+    """VideoToolbox 세션 한도 초과 또는 인코더 오류 감지."""
+    return any(k in stderr for k in (
+        "videotoolbox_encode_frame",
+        "Error while encoding",
+        "cannot open encoder",
+        "VTCompressionSessionCreate",
+    ))
+
+
 def _build_encode_args(codec_extra_tag: bool = False, force_cpu: bool = False) -> list:
     """
     인코더 설정 인수 반환.
-    NVENC: -c:v h264_nvenc -preset p4 -cq {CRF} -b:v 0
-    CPU:   -c:v libx264   -crf {CRF} -preset medium
-    force_cpu=True 이면 NVENC 설정 무시하고 CPU 인수 반환.
+    NVENC:         -c:v h264_nvenc  -preset p4 -cq {CRF} -b:v 0
+    VideoToolbox:  -c:v h264_videotoolbox -q:v {QUALITY} -b:v 0
+    CPU:           -c:v libx264    -crf {CRF} -preset medium
+    force_cpu=True 이면 하드웨어 인코더 무시하고 CPU 인수 반환.
     """
     if not force_cpu and _use_nvenc():
         nvenc_codec = "hevc_nvenc" if VIDEO_CODEC == "libx265" else "h264_nvenc"
@@ -79,9 +135,14 @@ def _build_encode_args(codec_extra_tag: bool = False, force_cpu: bool = False) -
         if codec_extra_tag and VIDEO_CODEC == "libx265":
             args += ["-tag:v", "hvc1"]
         return args
-    else:
-        codec_extra = ["-tag:v", "hvc1"] if codec_extra_tag and VIDEO_CODEC == "libx265" else []
-        return ["-c:v", VIDEO_CODEC, "-crf", str(CRF), "-preset", FFMPEG_PRESET] + codec_extra
+    if not force_cpu and _use_videotoolbox():
+        vt_codec = "hevc_videotoolbox" if VIDEO_CODEC == "libx265" else "h264_videotoolbox"
+        args = ["-c:v", vt_codec, "-q:v", str(VIDEOTOOLBOX_QUALITY), "-b:v", "0"]
+        if codec_extra_tag and VIDEO_CODEC == "libx265":
+            args += ["-tag:v", "hvc1"]
+        return args
+    codec_extra = ["-tag:v", "hvc1"] if codec_extra_tag and VIDEO_CODEC == "libx265" else []
+    return ["-c:v", VIDEO_CODEC, "-crf", str(CRF), "-preset", FFMPEG_PRESET] + codec_extra
 
 
 # 해상도 자동 선택 계단 (긴 변 기준, 내림차순)
@@ -164,9 +225,8 @@ def _worker_count(out_res: Tuple[int, int] = (1920, 1080)) -> int:
     if RENDER_WORKERS is not None:
         return max(1, RENDER_WORKERS)
     cpu = os.cpu_count() or 2
-    # NVENC + NVDEC: 인코딩·디코딩 모두 GPU → CPU는 필터(scale/pad)만 담당
-    # CPU 부하가 크게 줄어 cpu//2 까지 병렬 가능
-    if _use_nvenc():
+    # NVENC/VideoToolbox: 하드웨어 인코딩으로 CPU 부하가 크게 줄어 cpu//2 까지 병렬 가능
+    if _use_nvenc() or _use_videotoolbox():
         return max(1, cpu // 2)
     # CPU 인코딩: 고해상도일수록 클립당 CPU/메모리 부하 증가
     long_side = max(out_res)
@@ -306,12 +366,18 @@ def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int], out_fps
         output_path,
     ]
 
-    return _run_encode(clip, output_path, abs_start, abs_dur, encode_args, use_gpu=_use_nvenc(), out_fps=out_fps)
+    hw = _use_nvenc() or _use_videotoolbox()
+    return _run_encode(clip, output_path, abs_start, abs_dur, encode_args, use_gpu=hw, out_fps=out_fps)
 
 
 def _build_cmd(clip: dict, abs_start: float, abs_dur: float,
                encode_args: list, use_gpu: bool) -> list:
-    hwaccel = ["-hwaccel", "cuda"] if use_gpu else []
+    if not use_gpu:
+        hwaccel = []
+    elif _use_nvenc():
+        hwaccel = ["-hwaccel", "cuda"]
+    else:
+        hwaccel = ["-hwaccel", "videotoolbox"]
     base = ["ffmpeg", "-y"] + hwaccel + [
         "-ss", f"{abs_start:.3f}", "-t", f"{abs_dur:.3f}", "-i", clip["filepath"],
     ]
@@ -328,8 +394,8 @@ def _build_cmd(clip: dict, abs_start: float, abs_dur: float,
 def _run_encode(clip: dict, output_path: str,
                 abs_start: float, abs_dur: float,
                 encode_args: list, use_gpu: bool, out_fps: int = 30) -> bool:
-    """ffmpeg 실행. use_gpu=True 시 NVENC 세마포어 획득 후 실행."""
-    sem = _nvenc_semaphore if use_gpu else None
+    """ffmpeg 실행. use_gpu=True 시 하드웨어 세마포어 획득 후 실행."""
+    sem = (_nvenc_semaphore or _vt_semaphore) if use_gpu else None
     if sem:
         sem.acquire()
     try:
@@ -345,16 +411,15 @@ def _run_encode(clip: dict, output_path: str,
 
     if result.returncode != 0:
         raw = result.stderr.decode(errors="replace")
-        # NVENC 세션 한도/VRAM 부족 → CPU로 재시도
-        if use_gpu and _is_nvenc_session_error(raw):
-            print(f"\n  [NVENC 한도] {Path(clip['filepath']).name} → CPU 인코딩으로 재시도")
+
+        def _cpu_retry(label: str) -> bool:
+            print(f"\n  [{label}] {Path(clip['filepath']).name} → CPU 인코딩으로 재시도")
             cpu_encode_args = _build_encode_args(codec_extra_tag=True, force_cpu=True)
-            # encode_args에서 -vf 값과 출력경로 이후 인수 재활용
             vf_idx = encode_args.index("-vf")
             vf_val = encode_args[vf_idx + 1]
             out_idx = next(i for i, a in enumerate(encode_args)
                            if not a.startswith("-") and i > 4)
-            tail_args = encode_args[out_idx:]  # output_path만 포함
+            tail_args = encode_args[out_idx:]
             cpu_full = ["-vf", vf_val] + cpu_encode_args + [
                 "-r", str(out_fps), "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
@@ -362,6 +427,12 @@ def _run_encode(clip: dict, output_path: str,
             ] + tail_args
             return _run_encode(clip, output_path, abs_start, abs_dur,
                                cpu_full, use_gpu=False, out_fps=out_fps)
+
+        if use_gpu and _is_nvenc_session_error(raw):
+            return _cpu_retry("NVENC 한도")
+        if use_gpu and _is_vt_session_error(raw):
+            return _cpu_retry("VideoToolbox 한도")
+
         head = raw[:800]
         tail = raw[-400:] if len(raw) > 800 else ""
         err = head + ("\n...\n" + tail if tail else "")
