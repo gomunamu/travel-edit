@@ -9,6 +9,13 @@
 여행 동영상을 AI가 VLOG 형식으로 자동으로 편집해주는 도구입니다.  
 입력 폴더의 동영상을 분석해 날짜별로 컷 편집, (음성인식)자막 생성, 장소 표시까지 자동으로 처리합니다.
 
+<p align="center">
+  <img src="assets/ai-agents.svg" alt="Travel Video Editor — AI 에이전트 크루" width="100%">
+</p>
+
+> **이 도구는 여러 AI 에이전트가 협업하는 파이프라인으로 동작합니다.**  
+> 메타 스카우트(`ffprobe`로 촬영일·GPS·해상도 분석) → 컷 세그먼터(긴 클립 분할) → 보이스 리스너(`Whisper`로 음성 인식) → 자막 교정가(LLM으로 오인식 정제) → 클립 심사위원(`Claude AI`로 0~100점 채점) → 렌더 스프린터(`ffmpeg NVENC`로 GPU 병렬 렌더링)가 차례로 한 단계씩 책임지며, 로케이션 가이드(지오코딩)·프라이버시 가디언(얼굴 모자이크)·토큰 회계사(비용 집계)가 전 과정을 보조합니다. 각 에이전트는 위 그림의 메인 파이프라인 단계에 연결되어 있습니다.
+
 ## 주요 기능
 
 - **자동 컷 편집** — 짧거나 불필요한 클립 자동 제거, 긴 클립 자동 분할
@@ -485,6 +492,13 @@ python main.py <입력폴더> <출력폴더>
 
 An AI-powered tool that automatically edits travel videos into a vlog format.  
 It analyzes videos in an input folder and handles cut editing by date, subtitle generation via speech recognition, and location overlays — all automatically.
+
+<p align="center">
+  <img src="assets/ai-agents.svg" alt="Travel Video Editor — AI Agent Crew" width="100%">
+</p>
+
+> **This tool runs as a pipeline of collaborating AI agents.**  
+> The Meta Scout (analyzes date/GPS/resolution via `ffprobe`) → Cut Segmenter (splits long clips) → Voice Listener (speech recognition via `Whisper`) → Subtitle Editor (LLM refinement of misrecognitions) → Clip Judge (0–100 scoring via `Claude AI`) → Render Sprinter (GPU-parallel rendering via `ffmpeg NVENC`) each own one stage in turn, while the Location Guide (geocoding), Privacy Guardian (face mosaic), and Token Accountant (cost tracking) assist throughout. Each agent maps to a stage of the main pipeline shown above.
 
 ## Features
 

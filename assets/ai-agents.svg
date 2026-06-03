@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 840" font-family="'Noto Sans KR','Helvetica Neue',Arial,'Malgun Gothic',sans-serif">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#fbfcfe"/><stop offset="1" stop-color="#eef2f8"/>
+  </linearGradient>
+  <linearGradient id="spine" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#2b3550"/><stop offset="1" stop-color="#3c4a73"/>
+  </linearGradient>
+  <filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#1a2540" flood-opacity="0.16"/>
+  </filter>
+  <marker id="arr" markerWidth="9" markerHeight="9" refX="6" refY="3"
+          orient="auto" markerUnits="strokeWidth">
+    <path d="M0,0 L6,3 L0,6 Z" fill="#9aa6bd"/>
+  </marker>
+</defs>
+<rect width="1300" height="840" fill="url(#bg)"/>
+<text x="650.0" y="50" text-anchor="middle" font-size="31" font-weight="800" fill="#222b45">🎬 Travel Video Editor — AI 에이전트 크루</text>
+<text x="650.0" y="84" text-anchor="middle" font-size="16.5" fill="#5b6781">여러 AI 에이전트가 협업해 여행 영상을 자동 편집합니다 · 각 에이전트는 고유한 도구로 한 단계를 책임집니다</text>
+<rect x="70" y="332" width="988" height="96" rx="16" fill="url(#spine)" filter="url(#sh)"/>
+<text x="88" y="320" font-size="13" font-weight="700" fill="#8b97b5" letter-spacing="1.5">▶ MAIN PIPELINE · 메인 알고리즘</text>
+<circle cx="152" cy="362" r="14" fill="#f4ad4e"/>
+<text x="152" y="367" text-anchor="middle" font-size="15" font-weight="800" fill="#2b3550">1</text>
+<text x="152" y="394" text-anchor="middle" font-size="14.5" font-weight="700" fill="#ffffff">수집·메타</text>
+<text x="152" y="412" text-anchor="middle" font-size="10.5" fill="#9fb0d6" letter-spacing="1">SCAN</text>
+<line x1="233.5" y1="346" x2="233.5" y2="414" stroke="#566188" stroke-width="1"/>
+<circle cx="315" cy="362" r="14" fill="#f4ad4e"/>
+<text x="315" y="367" text-anchor="middle" font-size="15" font-weight="800" fill="#2b3550">2</text>
+<text x="315" y="394" text-anchor="middle" font-size="14.5" font-weight="700" fill="#ffffff">컷 분할</text>
+<text x="315" y="412" text-anchor="middle" font-size="10.5" fill="#9fb0d6" letter-spacing="1">SPLIT</text>
+<line x1="397.0" y1="346" x2="397.0" y2="414" stroke="#566188" stroke-width="1"/>
+<circle cx="479" cy="362" r="14" fill="#f4ad4e"/>
+<text x="479" y="367" text-anchor="middle" font-size="15" font-weight="800" fill="#2b3550">3</text>
+<text x="479" y="394" text-anchor="middle" font-size="14.5" font-weight="700" fill="#ffffff">음성 인식</text>
+<text x="479" y="412" text-anchor="middle" font-size="10.5" fill="#9fb0d6" letter-spacing="1">LISTEN</text>
+<line x1="560.5" y1="346" x2="560.5" y2="414" stroke="#566188" stroke-width="1"/>
+<circle cx="642" cy="362" r="14" fill="#f4ad4e"/>
+<text x="642" y="367" text-anchor="middle" font-size="15" font-weight="800" fill="#2b3550">4</text>
+<text x="642" y="394" text-anchor="middle" font-size="14.5" font-weight="700" fill="#ffffff">자막 정제</text>
+<text x="642" y="412" text-anchor="middle" font-size="10.5" fill="#9fb0d6" letter-spacing="1">REFINE</text>
+<line x1="723.5" y1="346" x2="723.5" y2="414" stroke="#566188" stroke-width="1"/>
+<circle cx="805" cy="362" r="14" fill="#f4ad4e"/>
+<text x="805" y="367" text-anchor="middle" font-size="15" font-weight="800" fill="#2b3550">5</text>
+<text x="805" y="394" text-anchor="middle" font-size="14.5" font-weight="700" fill="#ffffff">클립 평가</text>
+<text x="805" y="412" text-anchor="middle" font-size="10.5" fill="#9fb0d6" letter-spacing="1">SCORE</text>
+<line x1="886.5" y1="346" x2="886.5" y2="414" stroke="#566188" stroke-width="1"/>
+<circle cx="968" cy="362" r="14" fill="#f4ad4e"/>
+<text x="968" y="367" text-anchor="middle" font-size="15" font-weight="800" fill="#2b3550">6</text>
+<text x="968" y="394" text-anchor="middle" font-size="14.5" font-weight="700" fill="#ffffff">렌더·합본</text>
+<text x="968" y="412" text-anchor="middle" font-size="10.5" fill="#9fb0d6" letter-spacing="1">RENDER</text>
+<line x1="1058" y1="380.0" x2="1082" y2="380.0" stroke="#9aa6bd" stroke-width="2.5" marker-end="url(#arr)"/>
+<rect x="1084" y="332" width="170" height="96" rx="14" fill="#ffffff" stroke="#f4ad4e" stroke-width="2.5" filter="url(#sh)"/>
+<text x="1169" y="372" text-anchor="middle" font-size="30">🎁</text>
+<text x="1169" y="398" text-anchor="middle" font-size="13.5" font-weight="700" fill="#222b45">완성 영상</text>
+<text x="1169" y="414" text-anchor="middle" font-size="10" fill="#7a8197">travel_YYYY-MM-DD.mp4</text>
+<g filter="url(#sh)"><rect x="4.0" y="120" width="296" height="170" rx="15" fill="#ffffff" stroke="#7c5cf0" stroke-width="1.4"/><rect x="4.0" y="120" width="296" height="7" rx="3.5" fill="#7c5cf0"/></g><circle cx="278.0" cy="150" r="15" fill="#7c5cf0"/><text x="278.0" y="155" text-anchor="middle" font-size="16" font-weight="800" fill="#ffffff">1</text><text x="50.0" y="186" text-anchor="middle" font-size="46" font-family="'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Twemoji Mozilla',sans-serif">🦉</text><text x="86.0" y="162" font-size="19" font-weight="800" fill="#222b45">메타 스카우트</text><rect x="86.0" y="172" width="60" height="24" rx="12" fill="#7c5cf0" fill-opacity="0.13"/><text x="116.0" y="189" text-anchor="middle" font-size="13.5" font-weight="700" fill="#7c5cf0">분석</text><text x="26.0" y="232" font-size="13" fill="#3b4252">🔧 <tspan font-weight="700" fill="#7c5cf0">ffprobe</tspan></text><text x="26.0" y="260" font-size="12.5" fill="#5b6781">촬영일·GPS·해상도 추출</text>
+<line x1="152" y1="290" x2="152" y2="332" stroke="#7c5cf0" stroke-width="2.2" stroke-dasharray="5 4" marker-end="url(#arr)" opacity="0.85"/>
+<g filter="url(#sh)"><rect x="331.0" y="120" width="296" height="170" rx="15" fill="#ffffff" stroke="#2f9e54" stroke-width="1.4"/><rect x="331.0" y="120" width="296" height="7" rx="3.5" fill="#2f9e54"/></g><circle cx="605.0" cy="150" r="15" fill="#2f9e54"/><text x="605.0" y="155" text-anchor="middle" font-size="16" font-weight="800" fill="#ffffff">3</text><text x="377.0" y="186" text-anchor="middle" font-size="46" font-family="'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Twemoji Mozilla',sans-serif">🦜</text><text x="413.0" y="162" font-size="19" font-weight="800" fill="#222b45">보이스 리스너</text><rect x="413.0" y="172" width="60" height="24" rx="12" fill="#2f9e54" fill-opacity="0.13"/><text x="443.0" y="189" text-anchor="middle" font-size="13.5" font-weight="700" fill="#2f9e54">인식</text><text x="353.0" y="232" font-size="13" fill="#3b4252">🔧 <tspan font-weight="700" fill="#2f9e54">Whisper · CUDA</tspan></text><text x="353.0" y="260" font-size="12.5" fill="#5b6781">음성 → 자막 텍스트</text>
+<line x1="479" y1="290" x2="479" y2="332" stroke="#2f9e54" stroke-width="2.2" stroke-dasharray="5 4" marker-end="url(#arr)" opacity="0.85"/>
+<g filter="url(#sh)"><rect x="657.0" y="120" width="296" height="170" rx="15" fill="#ffffff" stroke="#2f7fd4" stroke-width="1.4"/><rect x="657.0" y="120" width="296" height="7" rx="3.5" fill="#2f7fd4"/></g><circle cx="931.0" cy="150" r="15" fill="#2f7fd4"/><text x="931.0" y="155" text-anchor="middle" font-size="16" font-weight="800" fill="#ffffff">5</text><text x="703.0" y="186" text-anchor="middle" font-size="46" font-family="'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Twemoji Mozilla',sans-serif">🐬</text><text x="739.0" y="162" font-size="19" font-weight="800" fill="#222b45">클립 심사위원</text><rect x="739.0" y="172" width="60" height="24" rx="12" fill="#2f7fd4" fill-opacity="0.13"/><text x="769.0" y="189" text-anchor="middle" font-size="13.5" font-weight="700" fill="#2f7fd4">평가</text><text x="679.0" y="232" font-size="13" fill="#3b4252">🔧 <tspan font-weight="700" fill="#2f7fd4">Claude AI</tspan></text><text x="679.0" y="260" font-size="12.5" fill="#5b6781">0~100점 채점·선별</text>
+<line x1="805" y1="290" x2="805" y2="332" stroke="#2f7fd4" stroke-width="2.2" stroke-dasharray="5 4" marker-end="url(#arr)" opacity="0.85"/>
+<g filter="url(#sh)"><rect x="167.0" y="470" width="296" height="170" rx="15" fill="#ffffff" stroke="#d39320" stroke-width="1.4"/><rect x="167.0" y="470" width="296" height="7" rx="3.5" fill="#d39320"/></g><circle cx="441.0" cy="500" r="15" fill="#d39320"/><text x="441.0" y="505" text-anchor="middle" font-size="16" font-weight="800" fill="#ffffff">2</text><text x="213.0" y="536" text-anchor="middle" font-size="46" font-family="'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Twemoji Mozilla',sans-serif">🐝</text><text x="249.0" y="512" font-size="19" font-weight="800" fill="#222b45">컷 세그먼터</text><rect x="249.0" y="522" width="60" height="24" rx="12" fill="#d39320" fill-opacity="0.13"/><text x="279.0" y="539" text-anchor="middle" font-size="13.5" font-weight="700" fill="#d39320">분할</text><text x="189.0" y="582" font-size="13" fill="#3b4252">🔧 <tspan font-weight="700" fill="#d39320">길이 기반 분할</tspan></text><text x="189.0" y="610" font-size="12.5" fill="#5b6781">긴 클립 자동 분할</text>
+<line x1="315" y1="470" x2="315" y2="428" stroke="#d39320" stroke-width="2.2" stroke-dasharray="5 4" marker-end="url(#arr)" opacity="0.85"/>
+<g filter="url(#sh)"><rect x="494.0" y="470" width="296" height="170" rx="15" fill="#ffffff" stroke="#dd6b20" stroke-width="1.4"/><rect x="494.0" y="470" width="296" height="7" rx="3.5" fill="#dd6b20"/></g><circle cx="768.0" cy="500" r="15" fill="#dd6b20"/><text x="768.0" y="505" text-anchor="middle" font-size="16" font-weight="800" fill="#ffffff">4</text><text x="540.0" y="536" text-anchor="middle" font-size="46" font-family="'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Twemoji Mozilla',sans-serif">🦊</text><text x="576.0" y="512" font-size="19" font-weight="800" fill="#222b45">자막 교정가</text><rect x="576.0" y="522" width="60" height="24" rx="12" fill="#dd6b20" fill-opacity="0.13"/><text x="606.0" y="539" text-anchor="middle" font-size="13.5" font-weight="700" fill="#dd6b20">교정</text><text x="516.0" y="582" font-size="13" fill="#3b4252">🔧 <tspan font-weight="700" fill="#dd6b20">Claude→GPT→Gemini</tspan></text><text x="516.0" y="610" font-size="12.5" fill="#5b6781">오인식·반복 보정</text>
+<line x1="642" y1="470" x2="642" y2="428" stroke="#dd6b20" stroke-width="2.2" stroke-dasharray="5 4" marker-end="url(#arr)" opacity="0.85"/>
+<g filter="url(#sh)"><rect x="820.0" y="470" width="296" height="170" rx="15" fill="#ffffff" stroke="#e0413c" stroke-width="1.4"/><rect x="820.0" y="470" width="296" height="7" rx="3.5" fill="#e0413c"/></g><circle cx="1094.0" cy="500" r="15" fill="#e0413c"/><text x="1094.0" y="505" text-anchor="middle" font-size="16" font-weight="800" fill="#ffffff">6</text><text x="866.0" y="536" text-anchor="middle" font-size="46" font-family="'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Twemoji Mozilla',sans-serif">🐆</text><text x="902.0" y="512" font-size="19" font-weight="800" fill="#222b45">렌더 스프린터</text><rect x="902.0" y="522" width="60" height="24" rx="12" fill="#e0413c" fill-opacity="0.13"/><text x="932.0" y="539" text-anchor="middle" font-size="13.5" font-weight="700" fill="#e0413c">렌더</text><text x="842.0" y="582" font-size="13" fill="#3b4252">🔧 <tspan font-weight="700" fill="#e0413c">ffmpeg NVENC/NVDEC</tspan></text><text x="842.0" y="610" font-size="12.5" fill="#5b6781">GPU 병렬 렌더·합본</text>
+<line x1="968" y1="470" x2="968" y2="428" stroke="#e0413c" stroke-width="2.2" stroke-dasharray="5 4" marker-end="url(#arr)" opacity="0.85"/>
+<rect x="70" y="668" width="1158" height="150" rx="16" fill="#ffffff" stroke="#d7deea" stroke-width="1.2"/>
+<text x="92" y="698" font-size="14.5" font-weight="800" fill="#3b4252">🤝 보조 에이전트 · Supporting Crew</text>
+<text x="92" y="720" font-size="12" fill="#6b7794">전 과정에서 본편 에이전트를 돕는 조연들</text>
+<text x="1206" y="698" text-anchor="end" font-size="12.5" fill="#5b6781">🔁 AI 폴백: Claude → OpenAI → Gemini (rate limit 시 자동 전환)</text>
+<rect x="75" y="730" width="350" height="74" rx="12" fill="#2c9b96" fill-opacity="0.06" stroke="#2c9b96" stroke-width="1.1"/>
+<text x="113" y="777" text-anchor="middle" font-size="32" font-family="'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Twemoji Mozilla',sans-serif">🐢</text>
+<text x="147" y="758" font-size="15.5" font-weight="800" fill="#222b45">로케이션 가이드</text>
+<text x="147" y="778" font-size="12.5" fill="#3b4252">🔧 <tspan font-weight="700" fill="#2c9b96">reverse-geocoder</tspan></text>
+<text x="147" y="795" font-size="11.5" fill="#6b7794">GPS → 도시·국가 자막</text>
+<rect x="470" y="730" width="350" height="74" rx="12" fill="#566175" fill-opacity="0.06" stroke="#566175" stroke-width="1.1"/>
+<text x="508" y="777" text-anchor="middle" font-size="32" font-family="'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Twemoji Mozilla',sans-serif">🐼</text>
+<text x="542" y="758" font-size="15.5" font-weight="800" fill="#222b45">프라이버시 가디언</text>
+<text x="542" y="778" font-size="12.5" fill="#3b4252">🔧 <tspan font-weight="700" fill="#566175">InsightFace</tspan></text>
+<text x="542" y="795" font-size="11.5" fill="#6b7794">얼굴 자동 모자이크</text>
+<rect x="865" y="730" width="350" height="74" rx="12" fill="#b07418" fill-opacity="0.06" stroke="#b07418" stroke-width="1.1"/>
+<text x="903" y="777" text-anchor="middle" font-size="32" font-family="'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji','Twemoji Mozilla',sans-serif">🐿️</text>
+<text x="937" y="758" font-size="15.5" font-weight="800" fill="#222b45">토큰 회계사</text>
+<text x="937" y="778" font-size="12.5" fill="#3b4252">🔧 <tspan font-weight="700" fill="#b07418">token tracker</tspan></text>
+<text x="937" y="795" font-size="11.5" fill="#6b7794">API 토큰·비용 집계</text>
+</svg>
