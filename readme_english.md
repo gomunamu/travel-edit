@@ -6,7 +6,7 @@ An AI-powered tool that automatically edits travel videos into a vlog format.
 It analyzes videos in an input folder and handles cut editing by date, subtitle generation via speech recognition, and location overlays — all automatically.
 
 <p align="center">
-  <img src="assets/ai-agents-en.svg" alt="Travel Video Editor — AI Agent Crew" width="100%">
+  <img src="assets/ai-agents-en.png" alt="Travel Video Editor — AI Agent Crew" width="100%">
 </p>
 
 > **This tool runs as a pipeline of collaborating AI agents.**  
