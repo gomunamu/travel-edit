@@ -1,4 +1,7 @@
-"""AI 기반 클립 평가 - Claude / OpenAI / Gemini 라운드로빈"""
+"""AI 기반 클립 평가
+폴백 체인: Claude (Anthropic) → OpenAI → Gemini → 규칙 기반 평가
+(rate limit·실패 시 다음 API로 순차 강등, refiner.py와 동일한 패턴)
+"""
 import json
 import re
 import threading

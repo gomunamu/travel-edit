@@ -61,8 +61,11 @@ def main():
   python main.py /media/usb/DCIM ./output --no-ai
   python main.py ./videos ./output --whisper-model large-v3
 
-환경변수:
-  ANTHROPIC_API_KEY  Claude AI API 키 (없으면 규칙 기반 평가 사용)
+환경변수 (AI 평가·자막교정 폴백 체인: Claude → OpenAI → Gemini → 규칙 기반):
+  ANTHROPIC_API_KEY  Claude AI API 키 (1순위)
+  OPENAI_API_KEY     OpenAI API 키 (2순위 폴백)
+  GEMINI_API_KEY     Gemini API 키 (3순위 폴백)
+  ※ 모두 없으면 규칙 기반 평가로 동작
 
 출력:
   ./output/travel_2024-07-15.mp4   날짜별 편집 완료 영상

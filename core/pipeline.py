@@ -346,7 +346,7 @@ def print_clip_preview(segments: List[dict], transcripts: Dict[str, dict]) -> No
         # 무음 클립은 출력 생략
 
 
-# ─── 5. AI 평가 (병렬 - Claude API) ───────────────────────────────────────
+# ─── 5. AI 평가 (병렬 - 폴백 체인: Claude → OpenAI → Gemini → 규칙 기반) ──
 def evaluate_all(
     segments: List[dict],
     transcripts: Dict[str, dict],
@@ -855,8 +855,16 @@ def run(input_folder: str, output_folder: str):
         print("\n[4-c] 자막 미리보기 (최종):")
         print_clip_preview(segments, transcripts)
 
-    # 5. AI 평가
-    print(f"\n[5/6] AI 클립 평가...")
+    # 5. AI 평가 (폴백 체인: Claude → OpenAI → Gemini → 규칙 기반)
+    _eval_keys = [
+        k for k, v in [
+            ("Claude",  _config.ANTHROPIC_API_KEY),
+            ("OpenAI",  _config.OPENAI_API_KEY),
+            ("Gemini",  _config.GEMINI_API_KEY),
+        ] if v
+    ]
+    _eval_label = " → ".join(_eval_keys + ["규칙 기반"])
+    print(f"\n[5/6] AI 클립 평가 (폴백 체인: {_eval_label})...")
     evaluations = evaluate_all(segments, transcripts, cache)
     _token_tracker.print_current("5단계 AI 평가 후")
 
