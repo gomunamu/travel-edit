@@ -484,6 +484,17 @@ python main.py <입력폴더> <출력폴더>
 [경고] Gemini 평가 실패: cannot import name 'genai' from 'google'
 ```
 
+## 라이선스
+
+Copyright © 2026 gomunamu
+
+이 프로젝트는 **[PolyForm Noncommercial License 1.0.0](LICENSE)** 하에 배포됩니다.
+
+- **비상업적 용도**(개인·연구·교육·비영리 단체 등)로는 자유롭게 사용·수정·배포할 수 있습니다.
+- **상업적 사용은 금지**됩니다. 영리 목적으로 사용하려면 별도의 라이선스가 필요합니다.
+
+자세한 내용은 [`LICENSE`](LICENSE) 파일을 참고하세요.
+
 ---
 
 <a name="english"></a>
@@ -951,3 +962,14 @@ Running with the system Python (`/usr/bin/python3`) will produce a Gemini import
 ```
 [WARNING] Gemini evaluation failed: cannot import name 'genai' from 'google'
 ```
+
+## License
+
+Copyright © 2026 gomunamu
+
+This project is licensed under the **[PolyForm Noncommercial License 1.0.0](LICENSE)**.
+
+- Free to use, modify, and distribute for **any noncommercial purpose** (personal, research, educational, nonprofit organizations, etc.).
+- **Commercial use is prohibited.** A separate license is required for any commercial use.
+
+See the [`LICENSE`](LICENSE) file for full terms.
