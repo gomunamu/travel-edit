@@ -486,7 +486,7 @@ python main.py <입력폴더> <출력폴더>
 
 ## 라이선스
 
-Copyright © 2026 gomunamu
+Copyright © 2026 gomunamu@gmail.com
 
 이 프로젝트는 **[PolyForm Noncommercial License 1.0.0](LICENSE)** 하에 배포됩니다.
 
@@ -965,7 +965,7 @@ Running with the system Python (`/usr/bin/python3`) will produce a Gemini import
 
 ## License
 
-Copyright © 2026 gomunamu
+Copyright © 2026 gomunamu@gmail.com
 
 This project is licensed under the **[PolyForm Noncommercial License 1.0.0](LICENSE)**.
 
