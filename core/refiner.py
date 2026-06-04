@@ -86,8 +86,29 @@ def _parse_corrected(raw: str, expected_len: int) -> Optional[list]:
     return None
 
 
+# 잘못된 키(인증 오류)로 비활성화된 provider — 세션 동안 재시도하지 않음.
+# (대기해도 회복되지 않으므로 클립마다 무의미한 호출을 막는다)
+_auth_disabled: set = set()
+
+
+def _is_auth_error(e: Exception) -> bool:
+    """잘못된/만료된 키 등 대기해도 회복되지 않는 인증 오류."""
+    s = str(e).lower()
+    return any(k in s for k in (
+        "401", "403", "unauthorized", "authentication", "invalid_api_key",
+        "invalid api key", "incorrect api key", "api key not valid",
+        "invalid x-api-key", "permission_denied", "permission denied",
+    ))
+
+
+def _note_auth_fail(name: str):
+    if name not in _auth_disabled:
+        _auth_disabled.add(name)
+        print(f"  [자막교정] {name} 인증 오류(잘못된 키) → 이번 세션 사용 중단")
+
+
 def _call_claude(texts: list, system: str) -> Optional[list]:
-    if not ANTHROPIC_API_KEY:
+    if not ANTHROPIC_API_KEY or "Claude" in _auth_disabled:
         return None
     try:
         import anthropic
@@ -102,12 +123,14 @@ def _call_claude(texts: list, system: str) -> Optional[list]:
         _tracker.record("Anthropic", STT_REFINE_MODEL,
                         message.usage.input_tokens, message.usage.output_tokens)
         return _parse_corrected(message.content[0].text.strip(), len(texts))
-    except Exception:
+    except Exception as e:
+        if _is_auth_error(e):
+            _note_auth_fail("Claude")
         return None
 
 
 def _call_openai(texts: list, system: str) -> Optional[list]:
-    if not OPENAI_API_KEY:
+    if not OPENAI_API_KEY or "OpenAI" in _auth_disabled:
         return None
     try:
         from openai import OpenAI
@@ -124,12 +147,14 @@ def _call_openai(texts: list, system: str) -> Optional[list]:
         _tracker.record("OpenAI", OPENAI_MODEL,
                         msg.usage.prompt_tokens, msg.usage.completion_tokens)
         return _parse_corrected(msg.choices[0].message.content.strip(), len(texts))
-    except Exception:
+    except Exception as e:
+        if _is_auth_error(e):
+            _note_auth_fail("OpenAI")
         return None
 
 
 def _call_gemini(texts: list, system: str) -> Optional[list]:
-    if not GEMINI_API_KEY:
+    if not GEMINI_API_KEY or "Gemini" in _auth_disabled:
         return None
     try:
         from google import genai
@@ -148,7 +173,9 @@ def _call_gemini(texts: list, system: str) -> Optional[list]:
         _tracker.record("Gemini", GEMINI_MODEL,
                         meta.prompt_token_count, meta.candidates_token_count)
         return _parse_corrected(response.text, len(texts))
-    except Exception:
+    except Exception as e:
+        if _is_auth_error(e):
+            _note_auth_fail("Gemini")
         return None
 
 

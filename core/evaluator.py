@@ -207,12 +207,16 @@ class AdaptiveConcurrency:
 _adaptive = AdaptiveConcurrency(initial=3, min_w=1, max_w=50, increase_after=5)
 
 
-# ─── API 가용성 관리 (쿨다운 3회 실패 시 파일 내 영구 비활성화) ───────────────
+# ─── API 가용성 관리 ─────────────────────────────────────────────────────────
 # 우선순위: Claude → OpenAI → Gemini (순차 강등)
-# 파일 단위로 리셋: 다음 소스 파일 처리 시 API 상태 초기화 (rate limit 회복 가정)
+# - rate limit / 일시 실패: 쿨다운 후 재시도, 3회 누적 시 세션 내 비활성화.
+#   파일 단위로 조건부 리셋 (rate limit 회복 가정).
+# - 인증 오류(잘못된 키): 대기해도 회복 불가 → 즉시 세션 영구 비활성화.
+#   파일 리셋에도 되살리지 않아 클립·파일마다 무의미한 재시도를 막는다.
 _api_lock       = threading.Lock()
-_disabled_until: dict = {}   # {"Claude": timestamp or inf}
+_disabled_until: dict = {}   # {"Claude": timestamp or inf}  (쿨다운/누적 실패)
 _fail_count:     dict = {}   # {"Claude": int}
+_auth_disabled:  set  = set()  # 잘못된 키 — 세션 영구 비활성화 (리셋에도 유지)
 _COOLDOWN        = 5.0       # 실패 후 재시도 대기(초)
 _MAX_FAILS       = 3         # 이 횟수 도달 시 현재 파일 내 비활성화
 
@@ -224,6 +228,8 @@ def reset_api_state():
       (예: Claude 실패 후 OpenAI가 작동 중이면 Claude를 재시도하지 않음)
     - 모든 API가 비활성화된 경우에만 리셋한다.
       (rate limit이 회복됐을 가능성이 있으므로 다음 파일에서 재시도)
+    - 인증 오류로 비활성화된 키(_auth_disabled)는 리셋 대상에서 제외한다.
+      (잘못된 키는 다음 파일에서도 회복되지 않으므로 재시도하지 않음)
     """
     import time
     now = time.time()
@@ -236,8 +242,10 @@ def reset_api_state():
         configured.append("Gemini")
 
     with _api_lock:
-        has_active = any(now >= _disabled_until.get(n, 0) for n in configured)
-        if not has_active:
+        live = [n for n in configured if n not in _auth_disabled]
+        has_active = any(now >= _disabled_until.get(n, 0) for n in live)
+        if live and not has_active:
+            # 쿨다운/누적 실패만 리셋, 인증 오류 비활성화는 유지
             _disabled_until.clear()
             _fail_count.clear()
             print("  [API 리셋] 모든 API 비활성화 상태 → 다음 파일에서 재시도")
@@ -256,6 +264,15 @@ def _on_api_fail(name: str):
             print(f"  [API 쿨다운] {name} {_COOLDOWN:.0f}초 대기 (실패 {count}/{_MAX_FAILS})")
 
 
+def _on_auth_fail(name: str):
+    """잘못된 키(인증 오류) → 세션 동안 영구 비활성화. 파일 리셋에도 유지."""
+    with _api_lock:
+        already = name in _auth_disabled
+        _auth_disabled.add(name)
+    if not already:
+        print(f"  [API 비활성화] {name} 인증 오류(잘못된 키) → 이번 세션 사용 중단")
+
+
 def _get_apis():
     """우선순위(Claude→OpenAI→Gemini) 순으로 현재 활성화된 API 목록 반환."""
     import time
@@ -269,7 +286,7 @@ def _get_apis():
         candidates.append(("Gemini", _call_gemini))
     with _api_lock:
         return [(n, fn) for n, fn in candidates
-                if now >= _disabled_until.get(n, 0)]
+                if n not in _auth_disabled and now >= _disabled_until.get(n, 0)]
 
 
 # ─── 평가 진입점 ─────────────────────────────────────────────────────────────
@@ -312,16 +329,21 @@ def evaluate_clip(clip: dict, transcript: dict) -> dict:
     with _adaptive.slot():
         # 슬롯 진입 직후 최신 가용 API 목록 조회 (비활성화 반영)
         for name, caller in _get_apis():
-            result, rate_limited = caller(prompt, duration, system=system)
+            result, fail = caller(prompt, duration, system=system)
             if result is not None:
                 _adaptive.on_success()
                 return _scene_override(result, has_speech, duration)
-            if rate_limited:
+            if fail == "rate_limit":
                 _adaptive.on_rate_limit()
                 _on_api_fail(name)
                 remaining = _get_apis()
                 next_name = remaining[0][0] if remaining else "규칙 기반"
                 print(f"  [rate limit] {name} → {next_name} 으로 전환")
+            elif fail == "auth":
+                _on_auth_fail(name)
+                remaining = _get_apis()
+                next_name = remaining[0][0] if remaining else "규칙 기반"
+                print(f"  [인증 오류] {name} → {next_name} 으로 전환")
 
         _adaptive.on_success()
         return _rule_based_eval(duration, has_speech, speech_sec)
@@ -355,8 +377,9 @@ def _sanitize(text: str) -> str:
     return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
 
 
-# ─── API 호출 (result, is_rate_limited) 반환 ──────────────────────────────
-def _call_claude(prompt: str, duration: float, system: str = SYSTEM_PROMPT) -> Tuple[Optional[dict], bool]:
+# ─── API 호출 (result, fail_kind) 반환 ────────────────────────────────────
+# fail_kind: None(성공/일시오류) | "rate_limit"(쿨다운) | "auth"(잘못된 키, 영구 비활성화)
+def _call_claude(prompt: str, duration: float, system: str = SYSTEM_PROMPT) -> Tuple[Optional[dict], Optional[str]]:
     try:
         from anthropic import Anthropic
         client = Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -367,15 +390,12 @@ def _call_claude(prompt: str, duration: float, system: str = SYSTEM_PROMPT) -> T
         )
         _tracker.record("Anthropic", CLAUDE_MODEL,
                         msg.usage.input_tokens, msg.usage.output_tokens)
-        return _parse_response(msg.content[0].text.strip(), duration), False
+        return _parse_response(msg.content[0].text.strip(), duration), None
     except Exception as e:
-        if _is_rate_limit(e):
-            return None, True
-        print(f"  [경고] Claude 평가 실패: {e}")
-        return None, False
+        return None, _classify_error(e, "Claude")
 
 
-def _call_openai(prompt: str, duration: float, system: str = SYSTEM_PROMPT) -> Tuple[Optional[dict], bool]:
+def _call_openai(prompt: str, duration: float, system: str = SYSTEM_PROMPT) -> Tuple[Optional[dict], Optional[str]]:
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
@@ -388,15 +408,12 @@ def _call_openai(prompt: str, duration: float, system: str = SYSTEM_PROMPT) -> T
         )
         _tracker.record("OpenAI", OPENAI_MODEL,
                         msg.usage.prompt_tokens, msg.usage.completion_tokens)
-        return _parse_response(msg.choices[0].message.content.strip(), duration), False
+        return _parse_response(msg.choices[0].message.content.strip(), duration), None
     except Exception as e:
-        if _is_rate_limit(e):
-            return None, True
-        print(f"  [경고] OpenAI 평가 실패: {e}")
-        return None, False
+        return None, _classify_error(e, "OpenAI")
 
 
-def _call_gemini(prompt: str, duration: float, system: str = SYSTEM_PROMPT) -> Tuple[Optional[dict], bool]:
+def _call_gemini(prompt: str, duration: float, system: str = SYSTEM_PROMPT) -> Tuple[Optional[dict], Optional[str]]:
     try:
         from google import genai
         from google.genai import types
@@ -412,21 +429,39 @@ def _call_gemini(prompt: str, duration: float, system: str = SYSTEM_PROMPT) -> T
         meta = response.usage_metadata
         _tracker.record("Gemini", GEMINI_MODEL,
                         meta.prompt_token_count, meta.candidates_token_count)
-        return _parse_response(response.text, duration), False
+        return _parse_response(response.text, duration), None
     except Exception as e:
-        if _is_rate_limit(e):
-            return None, True
-        print(f"  [경고] Gemini 평가 실패: {e}")
-        return None, False
+        return None, _classify_error(e, "Gemini")
 
 
 # ─── 공통 유틸 ───────────────────────────────────────────────────────────────
+def _classify_error(e: Exception, name: str) -> Optional[str]:
+    """예외를 폴백 종류로 분류. rate_limit > auth 우선, 그 외는 일시 오류로 경고만."""
+    if _is_rate_limit(e):
+        return "rate_limit"
+    if _is_auth_error(e):
+        return "auth"
+    print(f"  [경고] {name} 평가 실패: {e}")
+    return None
+
+
 def _is_rate_limit(e: Exception) -> bool:
     """rate limit 또는 크레딧 소진 등 다음 API로 폴백해야 하는 에러."""
     s = str(e).lower()
     return any(k in s for k in (
         "429", "rate_limit", "rate limit", "quota", "resource_exhausted",
         "credit balance", "too low", "billing",
+    ))
+
+
+def _is_auth_error(e: Exception) -> bool:
+    """잘못된/만료된 키 등 대기해도 회복되지 않는 인증 오류.
+    rate limit 판별 이후에 호출되므로 quota성 403은 이미 걸러진 상태."""
+    s = str(e).lower()
+    return any(k in s for k in (
+        "401", "403", "unauthorized", "authentication", "invalid_api_key",
+        "invalid api key", "incorrect api key", "api key not valid",
+        "invalid x-api-key", "permission_denied", "permission denied",
     ))
 
 
