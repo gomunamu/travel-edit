@@ -27,7 +27,7 @@
 - **자동 해상도** — 원본 클립 최고 해상도 기준 자동 선택 (4K / 1440p / FHD / 720p)
 - **날짜별 출력** — 촬영 날짜 기준으로 영상 자동 분류 및 합본 생성
 - **병렬 렌더링** — 멀티코어 병렬 렌더링으로 빠른 처리
-- **AI 폴백** — Claude → OpenAI → Gemini 순서로 rate limit 시 자동 전환, 소스 파일 단위로 API 상태 리셋
+- **AI 폴백** — Claude → OpenAI → Gemini 순서로 자동 전환. rate limit은 쿨다운 후 소스 파일 단위로 재시도, 잘못된 키(인증 오류)는 즉시 세션 비활성화해 무의미한 재시도를 막음
 - **토큰 사용량 추적** — Anthropic / OpenAI / Gemini 각각 토큰·비용 집계
 
 ## 하드웨어 권장 사양
@@ -338,7 +338,21 @@ SPLIT_ORIENTATION=false        # true = 가로/세로 영상을 별도 파일로
 
 - `ANTHROPIC_API_KEY` 없으면 규칙 기반 클립 평가로 자동 대체
 - OpenAI / Gemini API 키 등록 시 Claude rate limit 발생 시 자동 폴백
+- 등록하지 않은 키는 시도조차 하지 않으므로, 보유한 키만 폴백 체인에 포함됨 (예: Claude + Gemini만 등록 시 OpenAI는 건너뜀)
 - `.env`는 `.gitignore`에 포함되어 있어 git에 업로드되지 않음
+
+#### 폴백 동작 상세
+
+클립 평가(5단계)와 STT 정제(4-b단계)는 동일한 폴백 체인(Claude → OpenAI → Gemini → 규칙 기반)을 사용하며, 오류 종류에 따라 다르게 대응합니다.
+
+| 상황 | 동작 |
+| --- | --- |
+| 키 미등록 | 해당 provider는 시도하지 않음 (폴백 체인에서 제외) |
+| **rate limit / 크레딧 소진** | 쿨다운 후 재시도. 3회 누적 시 세션 내 비활성화하되, **소스 파일 경계에서 모든 API가 비활성화된 경우에만** 리셋해 다음 파일에서 재시도 (한도 회복 가정) |
+| **인증 오류 (잘못된·만료된 키)** | 대기해도 회복되지 않으므로 **첫 오류 즉시 세션 동안 영구 비활성화**. 파일 경계 리셋에도 되살리지 않아 클립·파일마다 반복되는 무의미한 호출을 차단 |
+| 모든 provider 사용 불가 | 클립 평가는 규칙 기반 평가로, STT 정제는 원본(반복 제거만 적용) 유지로 자동 대체 |
+
+> 인증 오류 비활성화 시 `[API 비활성화] {provider} 인증 오류(잘못된 키) → 이번 세션 사용 중단` 로그가 출력됩니다. 키 오타·만료가 의심되면 이 메시지를 확인하세요.
 
 ## AI 클립 평가
 
@@ -522,7 +536,7 @@ It analyzes videos in an input folder and handles cut editing by date, subtitle 
 - **Auto Resolution** — Selects output resolution from the highest-resolution source clip (4K / 1440p / FHD / 720p)
 - **Date-based Output** — Classifies and merges videos by shooting date
 - **Parallel Rendering** — Multi-core parallel rendering for fast processing
-- **AI Fallback** — Automatically switches Claude → OpenAI → Gemini on rate limits
+- **AI Fallback** — Automatically switches Claude → OpenAI → Gemini. Rate limits retry after a cooldown (per source file); invalid keys (auth errors) are disabled instantly for the session to avoid pointless retries
 - **Token Usage Tracking** — Aggregates token counts and costs for Anthropic / OpenAI / Gemini
 
 ## Hardware Requirements
@@ -776,9 +790,9 @@ Copy `core/.env.example` to `core/.env` and configure:
 
 ```env
 # API keys (at least one required for AI features)
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...          # Optional — fallback when Claude rate-limits
-GEMINI_API_KEY=...             # Optional — fallback when OpenAI rate-limits
+ANTHROPIC_API_KEY=sk-ant-...   # 1st choice
+OPENAI_API_KEY=sk-...          # Optional — 2nd fallback (skipped if unset)
+GEMINI_API_KEY=...             # Optional — 3rd fallback (skipped if unset)
 
 # Whisper
 WHISPER_MODEL=large-v3         # tiny | base | small | medium | large-v3
@@ -817,8 +831,22 @@ MIN_DAY_DURATION=0
 SPLIT_ORIENTATION=false        # true = output landscape and portrait separately
 ```
 
-Without `ANTHROPIC_API_KEY`, clip evaluation falls back to rule-based scoring automatically.  
+Without `ANTHROPIC_API_KEY`, clip evaluation falls back to rule-based scoring automatically.
+Only configured keys are tried — providers without a key are skipped entirely (never attempted).
 `.env` is listed in `.gitignore` and will never be committed.
+
+#### Fallback behavior
+
+Clip evaluation (stage 5) and STT refinement (stage 4-b) share the same chain (Claude → OpenAI → Gemini → rule-based) and react differently per error type:
+
+| Situation | Behavior |
+| --- | --- |
+| Key not set | Provider is never attempted (excluded from the chain) |
+| **Rate limit / out of credit** | Retried after a cooldown; disabled for the session after 3 strikes, but state is reset **only when all APIs are disabled** at a source-file boundary, so the next file retries (assuming the limit recovered) |
+| **Auth error (invalid / expired key)** | Won't recover by waiting, so the provider is **disabled for the whole session on the first error** and is *not* revived by the file-boundary reset — preventing pointless per-clip/per-file retries |
+| All providers unavailable | Clip evaluation falls back to rule-based scoring; STT refinement keeps the original text (repetition removal only) |
+
+> On an auth-error disable, the log prints `[API 비활성화] {provider} 인증 오류(잘못된 키) → 이번 세션 사용 중단`. Check for this message if a key typo/expiry is suspected.
 
 ## AI Clip Scoring
 

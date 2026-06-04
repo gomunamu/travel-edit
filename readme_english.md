@@ -23,7 +23,7 @@ It analyzes videos in an input folder and handles cut editing by date, subtitle 
 - **Auto Resolution** — Selects output resolution from the highest-resolution source clip (4K / 1440p / FHD / 720p)
 - **Date-based Output** — Classifies and merges videos by shooting date
 - **Parallel Rendering** — Multi-core parallel rendering for fast processing
-- **AI Fallback** — Automatically switches Claude → OpenAI → Gemini on rate limits
+- **AI Fallback** — Automatically switches Claude → OpenAI → Gemini. Rate limits retry after a cooldown (per source file); invalid keys (auth errors) are disabled instantly for the session to avoid pointless retries
 - **Token Usage Tracking** — Aggregates token counts and costs for Anthropic / OpenAI / Gemini
 
 ## Hardware Requirements
@@ -277,9 +277,9 @@ Copy `core/.env.example` to `core/.env` and configure:
 
 ```env
 # API keys (at least one required for AI features)
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...          # Optional — fallback when Claude rate-limits
-GEMINI_API_KEY=...             # Optional — fallback when OpenAI rate-limits
+ANTHROPIC_API_KEY=sk-ant-...   # 1st choice
+OPENAI_API_KEY=sk-...          # Optional — 2nd fallback (skipped if unset)
+GEMINI_API_KEY=...             # Optional — 3rd fallback (skipped if unset)
 
 # Whisper
 WHISPER_MODEL=large-v3         # tiny | base | small | medium | large-v3
@@ -318,8 +318,22 @@ MIN_DAY_DURATION=0
 SPLIT_ORIENTATION=false        # true = output landscape and portrait separately
 ```
 
-Without `ANTHROPIC_API_KEY`, clip evaluation falls back to rule-based scoring automatically.  
+Without `ANTHROPIC_API_KEY`, clip evaluation falls back to rule-based scoring automatically.
+Only configured keys are tried — providers without a key are skipped entirely (never attempted).
 `.env` is listed in `.gitignore` and will never be committed.
+
+#### Fallback behavior
+
+Clip evaluation (stage 5) and STT refinement (stage 4-b) share the same chain (Claude → OpenAI → Gemini → rule-based) and react differently per error type:
+
+| Situation | Behavior |
+| --- | --- |
+| Key not set | Provider is never attempted (excluded from the chain) |
+| **Rate limit / out of credit** | Retried after a cooldown; disabled for the session after 3 strikes, but state is reset **only when all APIs are disabled** at a source-file boundary, so the next file retries (assuming the limit recovered) |
+| **Auth error (invalid / expired key)** | Won't recover by waiting, so the provider is **disabled for the whole session on the first error** and is *not* revived by the file-boundary reset — preventing pointless per-clip/per-file retries |
+| All providers unavailable | Clip evaluation falls back to rule-based scoring; STT refinement keeps the original text (repetition removal only) |
+
+> On an auth-error disable, the log prints `[API 비활성화] {provider} 인증 오류(잘못된 키) → 이번 세션 사용 중단`. Check for this message if a key typo/expiry is suspected.
 
 ## AI Clip Scoring
 
