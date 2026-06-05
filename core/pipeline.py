@@ -426,6 +426,7 @@ def render_day(
     evaluations: Dict[str, dict],
     cache: Cache,
     output_path: str,
+    selection_info: Optional[Dict[str, dict]] = None,
 ) -> bool:
     """
     하루치 세그먼트를 평가 결과에 따라 선별하고,
@@ -518,6 +519,13 @@ def render_day(
                 selected.sort(key=lambda c: c.get("creation_time", ""))
 
     if not selected:
+        if selection_info is not None:
+            for seg in day_segments:
+                selection_info[seg["clip_hash"]] = {
+                    "selected": False, "location": "",
+                    "trim_start": 0.0, "trim_end": seg.get("duration", 0.0),
+                    "speed": 1.0,
+                }
         print(f"  → {day_key}: 선택된 클립 없음, 건너뜀")
         return False
 
@@ -543,9 +551,16 @@ def render_day(
                 clip["gps"] = last_gps
                 clip["_gps_interpolated"] = True
 
+    # 무음 컷 배속 결정 (음성/자막 있는 컷은 항상 1.0배 → 자막 동기화 보존)
+    _silent_speed = getattr(_config, "SILENT_SPEEDUP", 1.0)
+    for clip in selected:
+        has_sp = transcripts.get(clip["clip_hash"], {}).get("has_speech", False)
+        clip["speed"] = _silent_speed if (_silent_speed > 1.0 and not has_sp) else 1.0
+
     # 장소 오버레이 (최종 순서 확정 후 적용)
     # carry-forward: 클립이 짧아서 오버레이가 충분히 표시되지 못하면
     # 같은 장소의 다음 클립으로 오버레이를 이전한다.
+    # clip_dur 는 배속 반영한 '출력' 길이 기준으로 계산한다.
     _min_overlay_sec = LOCATION_DISPLAY_DURATION  # 이 시간 미만이면 다음 클립으로 넘김
     prev_location = None
     location_remaining = 0.0  # 아직 표시해야 할 오버레이 잔여 시간
@@ -553,7 +568,7 @@ def render_day(
         location_name = None
         if clip.get("gps"):
             location_name = coords_to_str(clip["gps"])
-        clip_dur = clip["trim_end"] - clip["trim_start"]
+        clip_dur = (clip["trim_end"] - clip["trim_start"]) / clip.get("speed", 1.0)
 
         if location_name and location_name != prev_location:
             # 새 장소 진입
@@ -568,6 +583,26 @@ def render_day(
             clip["show_location"] = None
             location_remaining = 0.0
 
+    # 클립 요약용 선택 정보 기록 (최종 선택 + 위치 확정 후)
+    if selection_info is not None:
+        sel_meta = {
+            c["clip_hash"]: (
+                coords_to_str(c["gps"]) if c.get("gps") else "",
+                c["trim_start"], c["trim_end"], c.get("speed", 1.0),
+            )
+            for c in selected
+        }
+        for seg in day_segments:
+            h = seg["clip_hash"]
+            if h in sel_meta:
+                loc, ts, te, sp = sel_meta[h]
+                selection_info[h] = {"selected": True, "location": loc,
+                                     "trim_start": ts, "trim_end": te, "speed": sp}
+            else:
+                selection_info[h] = {"selected": False, "location": "",
+                                     "trim_start": 0.0, "trim_end": seg.get("duration", 0.0),
+                                     "speed": 1.0}
+
     print(f"  출력 해상도: {out_res[0]}x{out_res[1]}, {out_fps}fps, {len(selected)}개 클립")
 
     # ASS 파일 생성 (자막·장소) — 캐시 활용
@@ -576,7 +611,8 @@ def render_day(
         h = clip["clip_hash"]
         trim_start = clip["trim_start"]
         trim_end   = clip["trim_end"]
-        clip_dur   = trim_end - trim_start
+        speed      = clip.get("speed", 1.0)
+        clip_dur   = (trim_end - trim_start) / speed   # 배속 반영 출력 길이
 
         # 자막 ASS (overlay 모드)
         sub_path = None
@@ -597,12 +633,13 @@ def render_day(
                         margin_v=SUBTITLE_MARGIN_V,
                     )
 
-        # 장소 ASS
+        # 장소 ASS (배속 시 출력 길이가 달라지므로 캐시 태그에 배속 반영)
         loc_path = None
         loc_name = clip.get("show_location")
         if loc_name:
-            loc_path = cache.ass_path(h, "location_r")
-            if not cache.ass_exists(h, "location_r"):
+            _loc_tag = "location_r" if speed == 1.0 else f"location_r_s{speed:g}"
+            loc_path = cache.ass_path(h, _loc_tag)
+            if not cache.ass_exists(h, _loc_tag):
                 make_location_ass(
                     loc_name, clip_dur, loc_path, out_res,
                     display_duration=LOCATION_DISPLAY_DURATION,
@@ -810,6 +847,7 @@ def run(input_folder: str, output_folder: str):
 
     run_start = time.time()
     file_report: List[dict] = []   # {"name", "elapsed", "size_mb"}
+    selection_info: Dict[str, dict] = {}   # render_day가 채움 → 클립 요약 리포트용
 
     # 1. 스캔
     print("[1/6] 비디오 파일 스캔...")
@@ -900,7 +938,7 @@ def run(input_folder: str, output_folder: str):
         day_start = time.time()
         ok = render_day(
             day_key, day_segs, transcripts, evaluations,
-            cache, output_path
+            cache, output_path, selection_info=selection_info
         )
         if ok:
             elapsed = time.time() - day_start
@@ -974,3 +1012,16 @@ def run(input_folder: str, output_folder: str):
         print(f"  리포트 저장: {report_path}")
     except OSError as e:
         print(f"  [경고] 리포트 저장 실패: {e}")
+
+    # ── 클립별 요약 리포트 (clips_summary.json/csv, selected_clips.json) ──────────
+    if getattr(_config, "CLIP_SUMMARY", True):
+        try:
+            from core.summary import build_clip_rows, write_clip_summary
+            rows = build_clip_rows(segments, evaluations, transcripts, selection_info)
+            info = write_clip_summary(output_folder, rows)
+            if info:
+                print(f"  클립 요약 저장: {info['csv']}")
+                print(f"                 (전체 {info['total']}개 · 선택 {info['selected']}개"
+                      f" · selected_clips.json/clips_summary.json 동시 생성)")
+        except Exception as e:
+            print(f"  [경고] 클립 요약 저장 실패: {e}")

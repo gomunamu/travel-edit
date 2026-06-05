@@ -242,6 +242,8 @@ python main.py ./videos ./output --resolution fhd
 | `--workers N` | 렌더링 병렬 워커 수 |
 | `--skip-transcribe` | 음성 인식 건너뜀 (`--subtitle-lang off`과 동일) |
 | `--no-stt-refine` | STT 결과 LLM 정제 비활성화 |
+| `--no-clip-summary` | 컷별 요약 리포트 생성 안 함 (기본: 생성) |
+| `--silent-speed N` | 음성 없는 컷을 N배속으로 압축 (이동·도보 구간, 기본: 1.0=비활성) |
 | `--archive-dir DIR` | 완료된 mp4를 지정 폴더로 이동 (NVMe 용량 절약) |
 
 ### 편집 스타일 (`--style`)
@@ -373,9 +375,29 @@ Claude AI가 각 클립을 0~100점으로 채점합니다.
 output/
 ├── travel_2024-07-15.mp4     # 날짜별 편집 완료 영상
 ├── travel_2024-07-15.srt     # SRT 모드일 때 자막 파일
+├── clips_summary.csv         # 전체 컷 요약 (결정·점수·이유·장소, Excel 호환)
+├── clips_summary.json        # 전체 컷 요약 (JSON)
+├── selected_clips.json       # 최종 선택된 컷만 정리
+├── travel_report_*.txt       # 실행 요약 (파일별 작업시간·용량·토큰 사용량)
 ├── .cache/                   # 중간 작업 파일 (재실행 시 재사용)
 └── rendered/                 # 날짜별 렌더링된 클립들
 ```
+
+### 컷별 요약 리포트
+
+`clips_summary.csv` / `clips_summary.json`은 **모든 컷**에 대해 다음을 한 줄씩 기록합니다 — 어떤 장면이 왜 살았는지/잘렸는지/버려졌는지 한눈에 확인하고 편집 스타일·규칙을 보정하는 용도입니다.
+
+| 열 | 의미 |
+|------|------|
+| `decision` | 편집 결정 (`살림` / `트림` / `버림`) |
+| `selected` | 최종 편집본 포함 여부 (`True`/`False`, 렌더 건너뛴 날은 공란) |
+| `kept_start_sec` ~ `kept_end_sec` | 실제로 사용된 구간 |
+| `score_total` / `visual` / `speech` / `scene` / `flow` | AI 품질 점수 (각 0~25, 합계 0~100) |
+| `has_speech` / `speech_text` | 음성 유무와 전사 발췌 |
+| `location` | GPS 기반 추정 장소 |
+| `reason` | AI의 판단 이유 |
+
+`selected_clips.json`은 이 중 실제 편집본에 들어간 컷만 추린 것입니다. `--no-clip-summary`로 끌 수 있습니다.
 
 ## 설정
 
@@ -403,6 +425,23 @@ output/
 | `EDIT_STYLE` | balanced | 편집 스타일 |
 | `MIN_DAY_DURATION` | 0 | 하루 영상 최소 길이(초). 미달 시 버린 클립으로 채움 |
 | `SPLIT_ORIENTATION` | false | 가로/세로 영상을 별도 파일로 분리 출력 |
+| `CLIP_SUMMARY` | true | 컷별 요약 리포트(clips_summary.json/csv, selected_clips.json) 생성 |
+| `SILENT_SPEEDUP` | 1.0 | 음성 없는 컷 배속 배수 (1.0=비활성, 예: 2.0) |
+
+### 무음 컷 배속 (`SILENT_SPEEDUP` / `--silent-speed`)
+
+이동·도보처럼 **음성이 없는 저가치 구간**을 빠르게 돌려 지루함을 줄입니다.
+
+- 적용 대상: 음성(자막)이 **없는** 컷만. 음성 자막이 있는 컷은 자막 동기화를 위해 항상 원속(1.0배)으로 유지되므로 자막이 어긋날 일이 없습니다.
+- 배속된 컷의 오디오는 소음·피치 왜곡을 막기 위해 무음 트랙으로 대체됩니다.
+- 장소 오버레이는 배속 후 출력 길이에 맞춰 생성됩니다.
+- 기본값 `1.0`은 비활성이라, 켜지 않으면 기존 동작과 100% 동일합니다.
+
+```bash
+python main.py ./videos ./output --silent-speed 2.0   # 무음 컷 2배속
+```
+
+> 풍경 위주(`--style scene-long`) 편집에서는 무음 풍경 자체가 핵심이므로 배속을 끄는 것을 권장합니다.
 
 ### NVENC + NVDEC (GPU 하드웨어 인코딩·디코딩)
 
@@ -736,6 +775,8 @@ python main.py ./videos ./output --resolution fhd
 | `--workers N` | Number of parallel rendering workers |
 | `--skip-transcribe` | Skip speech recognition (same as `--subtitle-lang off`) |
 | `--no-stt-refine` | Disable LLM subtitle refinement |
+| `--no-clip-summary` | Skip per-clip summary report (default: generated) |
+| `--silent-speed N` | Speed up speechless clips by N× (transit/walking, default: 1.0 = off) |
 | `--archive-dir DIR` | Move finished mp4 files to this directory after rendering |
 
 ### Editing Styles (`--style`)
@@ -867,9 +908,15 @@ Clips with low scores are automatically removed. A 2–3 sentence reason is prin
 output/
 ├── travel_2024-07-15.mp4     # Final edited video per day
 ├── travel_2024-07-15.srt     # Subtitle file (SRT mode only)
+├── clips_summary.csv         # Per-clip summary (decision/score/reason/place, Excel-friendly)
+├── clips_summary.json        # Per-clip summary (JSON)
+├── selected_clips.json       # Only the clips that made the final cut
+├── travel_report_*.txt       # Run summary (per-file timing, size, token usage)
 ├── .cache/                   # Intermediate files (reused on re-run)
 └── rendered/                 # Rendered clips per day
 ```
+
+`clips_summary.csv` / `.json` log one row for **every clip** (decision, `selected` flag, kept range, the four AI quality scores, speech excerpt, GPS-inferred place, and the AI's rationale) so you can see why each scene was kept/trimmed/discarded. `selected_clips.json` is the subset that made the final cut. Disable with `--no-clip-summary`.
 
 ## Configuration
 
@@ -897,6 +944,10 @@ Settings can be changed in `config.py` or `.env`:
 | `EDIT_STYLE` | balanced | Editing style |
 | `MIN_DAY_DURATION` | 0 | Minimum seconds per day; fills from discarded clips if under target |
 | `SPLIT_ORIENTATION` | false | Output landscape and portrait clips as separate files |
+| `CLIP_SUMMARY` | true | Generate per-clip summary (clips_summary.json/csv, selected_clips.json) |
+| `SILENT_SPEEDUP` | 1.0 | Speed multiplier for speechless clips (1.0 = off, e.g. 2.0) |
+
+**Silent-clip speedup** (`SILENT_SPEEDUP` / `--silent-speed`): fast-forwards low-value speechless segments (transit, walking). Only clips **without speech** are sped up — clips with speech subtitles always stay at 1.0× so subtitles never desync. Sped clips get a silent audio track (no pitch distortion), and the location overlay is generated for the sped output length. Default `1.0` is off, so behavior is unchanged unless enabled. For landscape-focused edits (`--style scene-long`) leave it off, since silent scenery is the point.
 
 ### NVENC + NVDEC (GPU Hardware Encode/Decode)
 

@@ -327,6 +327,7 @@ def render_day_onepass(
 
     total_sec = sum(
         max(0.1, clip.get("trim_end", clip["duration"]) - clip.get("trim_start", 0.0))
+        / max(1.0, float(clip.get("speed", 1.0) or 1.0))
         for clip in clips_info
     )
     ok = _concat_clips(temp_paths, output_path, total_sec)
@@ -346,9 +347,13 @@ def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int], out_fps
     trim_start = clip.get("trim_start", 0.0)
     trim_end = clip.get("trim_end", clip["duration"])
     abs_start = src_start + trim_start
-    abs_dur = max(0.1, trim_end - trim_start)
+    abs_dur = max(0.1, trim_end - trim_start)   # 읽어들일 원본 길이
+    speed = max(1.0, float(clip.get("speed", 1.0) or 1.0))
+    out_dur = abs_dur / speed                   # 배속 적용 후 출력 길이
 
-    vf = (f"setpts=PTS-STARTPTS,"
+    # 배속: setpts 로 영상을 압축. 무음 컷만 배속되므로 자막(sub) 동기화 문제 없음.
+    setpts = f"setpts=(PTS-STARTPTS)/{speed:g}" if speed > 1.0 else "setpts=PTS-STARTPTS"
+    vf = (f"{setpts},"
           f"{build_scale_filter(clip.get('is_portrait', False), out_w, out_h)}")
     loc_path = clip.get("loc_path")
     sub_path = clip.get("sub_path")
@@ -367,11 +372,15 @@ def _render_clip(clip: dict, output_path: str, out_res: Tuple[int, int], out_fps
     ]
 
     hw = _use_nvenc() or _use_videotoolbox()
-    return _run_encode(clip, output_path, abs_start, abs_dur, encode_args, use_gpu=hw, out_fps=out_fps)
+    return _run_encode(clip, output_path, abs_start, abs_dur, encode_args,
+                       use_gpu=hw, out_fps=out_fps, speed=speed, out_dur=out_dur)
 
 
 def _build_cmd(clip: dict, abs_start: float, abs_dur: float,
-               encode_args: list, use_gpu: bool) -> list:
+               encode_args: list, use_gpu: bool,
+               speed: float = 1.0, out_dur: Optional[float] = None) -> list:
+    if out_dur is None:
+        out_dur = abs_dur
     if not use_gpu:
         hwaccel = []
     elif _use_nvenc():
@@ -381,25 +390,28 @@ def _build_cmd(clip: dict, abs_start: float, abs_dur: float,
     base = ["ffmpeg", "-y"] + hwaccel + [
         "-ss", f"{abs_start:.3f}", "-t", f"{abs_dur:.3f}", "-i", clip["filepath"],
     ]
-    if clip.get("has_audio", True):
+    if clip.get("has_audio", True) and speed <= 1.0:
         return base + encode_args
-    # 오디오 없는 클립: lavfi 무음 소스 추가
+    # 오디오 없는 클립 또는 배속 컷: lavfi 무음 소스로 대체 (출력 길이 = out_dur).
+    # 배속 컷의 원본 오디오는 무음/피치왜곡 방지를 위해 사용하지 않는다.
     return base + [
         "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
         "-map", "0:v", "-map", "1:a",
-        "-t", f"{abs_dur:.3f}",
+        "-t", f"{out_dur:.3f}",
     ] + encode_args
 
 
 def _run_encode(clip: dict, output_path: str,
                 abs_start: float, abs_dur: float,
-                encode_args: list, use_gpu: bool, out_fps: int = 30) -> bool:
+                encode_args: list, use_gpu: bool, out_fps: int = 30,
+                speed: float = 1.0, out_dur: Optional[float] = None) -> bool:
     """ffmpeg 실행. use_gpu=True 시 하드웨어 세마포어 획득 후 실행."""
     sem = (_nvenc_semaphore or _vt_semaphore) if use_gpu else None
     if sem:
         sem.acquire()
     try:
-        cmd = _build_cmd(clip, abs_start, abs_dur, encode_args, use_gpu)
+        cmd = _build_cmd(clip, abs_start, abs_dur, encode_args, use_gpu,
+                         speed=speed, out_dur=out_dur)
         result = subprocess.run(cmd, capture_output=True, timeout=600)  # 10분 상한
     except subprocess.TimeoutExpired:
         fname = Path(clip.get("filepath", "?")).name
@@ -426,7 +438,8 @@ def _run_encode(clip: dict, output_path: str,
                 "-movflags", "+faststart",
             ] + tail_args
             return _run_encode(clip, output_path, abs_start, abs_dur,
-                               cpu_full, use_gpu=False, out_fps=out_fps)
+                               cpu_full, use_gpu=False, out_fps=out_fps,
+                               speed=speed, out_dur=out_dur)
 
         if use_gpu and _is_nvenc_session_error(raw):
             return _cpu_retry("NVENC 한도")

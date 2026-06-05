@@ -223,6 +223,8 @@ python main.py ./videos ./output --resolution fhd
 | `--workers N` | Number of parallel rendering workers |
 | `--skip-transcribe` | Skip speech recognition (same as `--subtitle-lang off`) |
 | `--no-stt-refine` | Disable LLM subtitle refinement |
+| `--no-clip-summary` | Skip per-clip summary report (default: generated) |
+| `--silent-speed N` | Speed up speechless clips by N× (transit/walking, default: 1.0 = off) |
 | `--archive-dir DIR` | Move finished mp4 files to this directory after rendering |
 
 ### Editing Styles (`--style`)
@@ -354,9 +356,29 @@ Clips with low scores are automatically removed. A 2–3 sentence reason is prin
 output/
 ├── travel_2024-07-15.mp4     # Final edited video per day
 ├── travel_2024-07-15.srt     # Subtitle file (SRT mode only)
+├── clips_summary.csv         # Per-clip summary (decision/score/reason/place, Excel-friendly)
+├── clips_summary.json        # Per-clip summary (JSON)
+├── selected_clips.json       # Only the clips that made the final cut
+├── travel_report_*.txt       # Run summary (per-file timing, size, token usage)
 ├── .cache/                   # Intermediate files (reused on re-run)
 └── rendered/                 # Rendered clips per day
 ```
+
+### Per-clip summary report
+
+`clips_summary.csv` / `clips_summary.json` log one row for **every clip** — so you can see at a glance why each scene was kept, trimmed, or discarded, and tune the editing style/rules accordingly.
+
+| Column | Meaning |
+|--------|---------|
+| `decision` | Edit decision (`살림`=keep / `트림`=trim / `버림`=discard) |
+| `selected` | Whether it made the final cut (`True`/`False`; blank for skipped days) |
+| `kept_start_sec` ~ `kept_end_sec` | The portion actually used |
+| `score_total` / `visual` / `speech` / `scene` / `flow` | AI quality scores (0–25 each, 0–100 total) |
+| `has_speech` / `speech_text` | Speech presence and transcript excerpt |
+| `location` | GPS-inferred place |
+| `reason` | The AI's rationale |
+
+`selected_clips.json` is the subset that actually made it into the edit. Disable with `--no-clip-summary`.
 
 ## Configuration
 
@@ -384,6 +406,10 @@ Settings can be changed in `config.py` or `.env`:
 | `EDIT_STYLE` | balanced | Editing style |
 | `MIN_DAY_DURATION` | 0 | Minimum seconds per day; fills from discarded clips if under target |
 | `SPLIT_ORIENTATION` | false | Output landscape and portrait clips as separate files |
+| `CLIP_SUMMARY` | true | Generate per-clip summary (clips_summary.json/csv, selected_clips.json) |
+| `SILENT_SPEEDUP` | 1.0 | Speed multiplier for speechless clips (1.0 = off, e.g. 2.0) |
+
+**Silent-clip speedup** (`SILENT_SPEEDUP` / `--silent-speed`): fast-forwards low-value speechless segments (transit, walking). Only clips **without speech** are affected — clips with speech subtitles always stay at 1.0× so subtitles never desync. Sped clips get a silent audio track, and the location overlay is sized to the sped output. Default `1.0` is off. Leave it off for `--style scene-long` where silent scenery is intentional.
 
 ### NVENC + NVDEC (GPU Hardware Encode/Decode)
 

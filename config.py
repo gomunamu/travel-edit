@@ -191,6 +191,27 @@ MIN_DAY_DURATION = int(os.environ.get("MIN_DAY_DURATION", "0"))
 # .env: ARCHIVE_DIR=/mnt/nas/travel_archive
 ARCHIVE_DIR = os.environ.get("ARCHIVE_DIR", "") or None
 
+# === 무음 컷 배속 설정 ===
+# 음성(자막) 없는 컷을 이 배수로 빠르게 재생 → 이동·도보 등 저가치 구간 압축.
+# 음성 자막이 있는 컷은 자막 동기화를 위해 항상 1.0배(원속)로 둔다.
+# 배속된 무음 컷의 오디오는 무음 트랙으로 대체(소음·피치왜곡 방지).
+# 1.0 = 비활성(기본). 예: 2.0 = 무음 컷 2배속.
+# .env: SILENT_SPEEDUP=2.0
+try:
+    SILENT_SPEEDUP = float(os.environ.get("SILENT_SPEEDUP", "1.0"))
+except ValueError:
+    SILENT_SPEEDUP = 1.0
+if SILENT_SPEEDUP < 1.0:
+    SILENT_SPEEDUP = 1.0
+
+# === 클립 요약 리포트 설정 ===
+# 모든 컷의 결정(살림/트림/버림)·점수·이유·장소를 출력 폴더에 함께 저장:
+#   clips_summary.json / clips_summary.csv  (전체 컷)
+#   selected_clips.json                     (최종 선택된 컷만)
+# 어떤 장면이 왜 선택·제외됐는지 확인하고 편집 규칙을 보정하는 용도.
+# .env: CLIP_SUMMARY=false 로 비활성 (기본: 활성)
+CLIP_SUMMARY = os.environ.get("CLIP_SUMMARY", "true").lower() not in ("0", "false", "off")
+
 # === 병렬 처리 설정 ===
 METADATA_WORKERS = 32          # NAS 환경: I/O 대기가 대부분 → 많을수록 유리
 SEGMENT_WORKERS = None             # None = max(4, cpu_count) — 전체 세그먼트 단일 풀 병렬

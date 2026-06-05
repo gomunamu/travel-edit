@@ -69,6 +69,8 @@ def main():
 
 출력:
   ./output/travel_2024-07-15.mp4   날짜별 편집 완료 영상
+  ./output/clips_summary.csv/json  컷별 결정·점수·이유·장소 요약 (전체 컷)
+  ./output/selected_clips.json     최종 선택된 컷만 정리
   ./output/.cache/                 중간 작업 파일 (재실행시 재사용)
   ./output/rendered/               날짜별 렌더링된 클립들
         """
@@ -110,6 +112,14 @@ def main():
     parser.add_argument(
         "--no-stt-refine", action="store_true",
         help="STT 결과 LLM 정제 비활성화 (기본: 활성화)"
+    )
+    parser.add_argument(
+        "--no-clip-summary", action="store_true",
+        help="컷별 요약 리포트(clips_summary.json/csv, selected_clips.json) 생성 안 함 (기본: 생성)"
+    )
+    parser.add_argument(
+        "--silent-speed", type=float, default=None, metavar="N",
+        help="음성 없는 컷을 N배속으로 압축 (이동·도보 구간, 기본: 1.0=비활성). 예: 2.0"
     )
     parser.add_argument(
         "--resolution", default=None,
@@ -167,6 +177,10 @@ def main():
         config.SUBTITLE_LANG = "off"
     if args.no_stt_refine:
         config.STT_REFINE = False
+    if args.no_clip_summary:
+        config.CLIP_SUMMARY = False
+    if args.silent_speed is not None:
+        config.SILENT_SPEEDUP = max(1.0, args.silent_speed)
     if args.resolution:
         config.OUTPUT_RESOLUTION = None if args.resolution == "auto" else _RES_MAP[args.resolution]
     if args.min_day_duration is not None:
